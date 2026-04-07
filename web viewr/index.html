@@ -1,0 +1,1693 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Просмотр 3D модели</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- URL для JSON файла с моделями -->
+    <meta id="models-json-url" name="models-json-url" content="https://res.cloudinary.com/dd3nhch0g/raw/upload/v1746464660/3d_models_svb9sm.JSON">
+    <!-- Конфигурация Supabase -->
+    <meta id="supabase-url" name="supabase-url" content="https://leopljjtdlgqcascsqds.supabase.co">
+    <meta id="supabase-key" name="supabase-key" content="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxlb3Bsamp0ZGxncWNhc2NzcWRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY4MTIyODIsImV4cCI6MjA2MjM4ODI4Mn0.PT9lDiYWNyMBMBZmQKHN0jnKa84uWen5O1Bb884fJk4">
+    
+    <style>
+        body {margin:0;padding:0;width:100%;height:100%;font-family:'Unbounded',sans-serif;overscroll-behavior:none}
+        /* Добавляем запрет выделения текста для всех элементов интерфейса */
+        .loading, #skipHDR, #controls, #display-mode, #help-icon, #help-panel, 
+        #model-selector, button, .control-btn, .display-mode-btn, 
+        #help-panel h3, #help-panel h4, .help-section, .help-row, 
+        #share-model-btn, #speed-control, #custom-model-upload,
+        #file-upload-btn, select, option, label {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+        #container {width:100%;height:100vh;position:relative;background:#1a1a1a;overflow:hidden}
+        canvas {display:block;width:100%;height:100%;touch-action:none}
+        .loading {position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:'Unbounded',sans-serif;color:#fff;font-size:16px;z-index:1000;background-color:rgba(0,0,0,0.7);padding:15px 25px;border-radius:10px}
+        #skipHDR {
+            position: absolute;
+            top: 60%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-family: 'Unbounded', sans-serif;
+            padding: 8px 16px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            display: none;
+            z-index: 1000;
+        }
+        #controls {position:absolute;bottom:20px;left:20px;z-index:1000;background-color:rgba(0,0,0,0.75);color:white;padding:12px 16px;border-radius:8px;display:flex;flex-direction:row;gap:12px;opacity:0.9;transition:opacity 0.3s,transform 0.2s;transform:translateY(0);box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+        #display-mode {
+            position: absolute;
+            top: auto;
+            bottom: 100px;
+            left: 20px;
+            z-index: 1000;
+            background-color: rgba(0,0,0,0.75);
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            opacity: 0.9;
+            transition: opacity 0.3s, transform 0.2s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        #help-icon {
+            position: absolute;
+            top: 20px;
+            right: 70px;
+            width: 36px;
+            height: 36px;
+            background-color: rgba(0,0,0,0.75);
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 36px;
+            cursor: pointer;
+            font-weight: bold;
+            z-index: 1200;
+            font-family: 'Unbounded', sans-serif;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: transform 0.2s, background-color 0.2s;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #help-icon:active {
+            transform: scale(0.95);
+            background-color: #4285f4;
+        }
+        #help-panel {
+            position: absolute;
+            top: 60px;
+            right: 20px;
+            background-color: rgba(0,0,0,0.85);
+            color: white;
+            padding: 24px;
+            border-radius: 8px;
+            width: 340px;
+            max-height: calc(100vh - 120px);
+            overflow-y: auto;
+            display: none;
+            z-index: 1300;
+            font-family: 'Unbounded', sans-serif;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            scrollbar-width: thin;
+            scrollbar-color: #4285f4 rgba(0,0,0,0.3);
+        }
+        #model-selector {
+            position:absolute;
+            top:20px;
+            left:20px;
+            z-index:1000;
+            background-color:rgba(0,0,0,0.75);
+            color:white;
+            padding:12px 16px;
+            border-radius:8px;
+            display:flex;
+            gap:12px;
+            align-items:center;
+            box-shadow:0 4px 12px rgba(0,0,0,0.3);
+            font-family:'Unbounded',sans-serif
+        }
+        
+        #model-selector select {
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: none;
+            background-color: #2a2a2a;
+            color: white;
+            font-size: 14px;
+            font-family: 'Unbounded', sans-serif;
+            cursor: pointer;
+            outline: none;
+            /* Скрываем нативную стрелку браузера */
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            /* Добавляем свою стрелку */
+            background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 5px top 50%;
+            padding-right: 30px;
+            text-overflow: ellipsis;
+            overflow: hidden;
+            white-space: nowrap;
+            min-width: 140px; /* Минимальная ширина для селектора */
+        }
+        
+        #share-model-btn {
+            font-family:'Unbounded',sans-serif;
+            font-weight:500;
+            background-color:#4285f4;
+            color:white;
+            border:none;
+            border-radius:6px;
+            padding:10px 18px;
+            cursor:pointer;
+            font-size:14px;
+            transition:background-color 0.2s,transform 0.1s;
+            letter-spacing:0.2px;
+            box-shadow:0 2px 5px rgba(0,0,0,0.2);
+            -webkit-tap-highlight-color:rgba(66,133,244,0.3);
+            min-width: 90px; /* Минимальная ширина для кнопки */
+            text-align: center;
+        }
+        
+        button.control-btn {font-family:'Unbounded',sans-serif;font-weight:500;background-color:#4285f4;color:white;border:none;border-radius:6px;padding:10px 18px;cursor:pointer;font-size:14px;transition:background-color 0.2s,transform 0.1s;letter-spacing:0.2px;box-shadow:0 2px 5px rgba(0,0,0,0.2);-webkit-tap-highlight-color:rgba(66,133,244,0.3)}
+        #display-mode h4 {font-size:14px;font-weight:500;margin:0 0 8px 0;text-align:center}
+        #display-mode-buttons {display:flex;flex-direction:column;gap:8px}
+        .display-mode-btn {font-family:'Unbounded',sans-serif;font-weight:500;color:white;border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;text-align:center;transition:background-color 0.2s,transform 0.1s;background-color:#333333;-webkit-tap-highlight-color:rgba(66,133,244,0.3)}
+        #help-panel h3 {margin-top:0;font-size:22px;font-weight:600;margin-bottom:20px;color:#4285f4;text-align:center}
+        #help-panel h4 {font-size:16px;font-weight:500;margin:0 0 12px 0;color:#4285f4;border-bottom:1px solid rgba(66,133,244,0.3);padding-bottom:8px}
+        .help-section {margin-bottom:24px}
+        .help-row {display:flex;justify-content:space-between;margin-bottom:16px;font-size:14px;align-items:flex-start}
+        .help-row span:first-child {font-weight:500;color:#ccc;flex:1;padding-right:15px}
+        .help-row span:last-child {font-weight:400;color:#fff;flex:1;text-align:right}
+        #model-selector select {
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: none;
+            background-color: #2a2a2a;
+            color: white;
+            font-size: 14px;
+            font-family: 'Unbounded', sans-serif;
+            cursor: pointer;
+            outline: none;
+            /* Скрываем нативную стрелку браузера */
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            /* Добавляем свою стрелку */
+            background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 5px top 50%;
+            padding-right: 30px;
+            text-overflow: ellipsis;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        #share-model-btn {font-family:'Unbounded',sans-serif;font-weight:500;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:white;border:none;border-radius:8px;padding:10px 16px;cursor:pointer;font-size:14px;transition:all 0.3s ease;letter-spacing:0.2px;box-shadow:0 2px 8px rgba(102,126,234,0.3);margin-left:10px;-webkit-tap-highlight-color:rgba(102,126,234,0.3)}
+        #speed-control {display:none;margin-left:10px;color:white;background-color:rgba(0,0,0,0.7);padding:8px 14px;border-radius:6px;font-size:14px;font-family:'Unbounded',sans-serif}
+        #speed-indicator {font-weight:bold;color:#FFC107}
+        
+        /* Стили для кнопок полноэкранного режима */
+        #fullscreen-btn, #exit-fullscreen-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 36px;
+            height: 36px;
+            min-width: 36px;
+            min-height: 36px;
+            background-color: rgba(0,0,0,0.75);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            z-index: 1100;
+            transition: transform 0.2s, background-color 0.2s;
+            -webkit-tap-highlight-color: transparent;
+            padding: 0;
+            margin: 0;
+            text-align: center;
+            line-height: 1;
+            overflow: hidden;
+        }
+        #exit-fullscreen-btn {
+            z-index: 2000;
+            display: none;
+        }
+        
+        /* Перемещаем кнопку вопроса влево */
+        #help-icon {
+            right: 70px;
+        }
+        
+        /* Сдвигаем кнопку загрузки модели влево */
+        .model-upload-btn {
+            position: absolute !important;
+            top: 20px !important;
+            right: 130px !important;
+            z-index: 1100 !important;
+            background-color: rgba(0,0,0,0.75) !important;
+            color: white !important;
+            padding: 12px 16px !important;
+            border-radius: 8px !important;
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 10px !important;
+            opacity: 0.9 !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+        }
+        
+        /* Модификатор для скрытия кнопки загрузки при открытом меню помощи */
+        .help-visible .model-upload-btn {
+            display: none !important;
+        }
+        
+        #fullscreen-btn:hover, #exit-fullscreen-btn:hover {
+            background-color: #4285f4;
+        }
+        #fullscreen-btn:active, #exit-fullscreen-btn:active {
+            transform: scale(0.95);
+            background-color: #4285f4;
+        }
+        
+        /* Стили для полноэкранного режима */
+        .fullscreen-mode #model-selector,
+        .fullscreen-mode #controls,
+        .fullscreen-mode #display-mode,
+        .fullscreen-mode #help-icon,
+        .fullscreen-mode #custom-model-upload,
+        .fullscreen-mode #upload-model-container,
+        .fullscreen-mode .model-upload-btn,
+        .fullscreen-mode #fullscreen-btn,
+        .fullscreen-mode #hdr-mode {
+            display: none !important;
+        }
+        .fullscreen-mode #exit-fullscreen-btn {
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        .fullscreen-mode #exit-fullscreen-btn:hover {
+            background-color: rgba(0,0,0,0.8);
+            transform: scale(1.1);
+        }
+        #fullscreen-btn {
+            transition: all 0.2s ease;
+        }
+        #fullscreen-btn:hover {
+            background-color: #5294ff;
+            transform: scale(1.05);
+        }
+        #exit-fullscreen-btn {
+            opacity: 0.7;
+            transition: opacity 0.3s, transform 0.2s, background-color 0.3s;
+        }
+        #exit-fullscreen-btn:hover {
+            opacity: 1;
+        }
+        
+        /* Стили для модального окна Telegram удалены */
+        
+        @keyframes activeGlow {0% {box-shadow:0 0 10px rgba(66,133,244,0.7)}50% {box-shadow:0 0 16px rgba(66,133,244,0.9)}100% {box-shadow:0 0 10px rgba(66,133,244,0.7)}}
+        button.control-btn.active, #share-model-btn.active, #file-upload-btn.active {animation:activeGlow 2s infinite;background-color:#4285f4 !important;color:white !important;box-shadow:0 0 16px rgba(66,133,244,0.9) !important;border:1px solid rgba(255,255,255,0.5) !important}
+        #reset-camera.button-pressed, #share-model-btn.button-pressed, #file-upload-btn.button-pressed {transform:scale(0.95) !important;transition:transform 0.2s ease-out}
+        .display-mode-btn.active {background-color:#4285f4 !important;color:white !important;font-weight:bold !important;box-shadow:0 0 12px rgba(66,133,244,0.8) !important;border:1px solid white !important}
+        #file-upload-container {display:flex;align-items:center;gap:10px}
+        #file-upload-btn {
+            font-family:'Unbounded',sans-serif;
+            font-weight:500;
+            background-color:#4285f4;
+            color:white;
+            border:none;
+            border-radius:6px;
+            padding:10px 18px;
+            cursor:pointer;
+            font-size:14px;
+            transition:all 0.2s ease;
+            letter-spacing:0.2px;
+            box-shadow:0 2px 5px rgba(0,0,0,0.2);
+            -webkit-tap-highlight-color:rgba(66,133,244,0.3)
+        }
+        
+        #file-upload-btn:hover {
+            background-color:#5294ff;
+            box-shadow:0 4px 8px rgba(0,0,0,0.3)
+        }
+        
+        #file-upload-btn.active {
+            animation:activeGlow 2s infinite;
+            background-color:#4285f4 !important;
+            color:white !important;
+            box-shadow:0 0 16px rgba(66,133,244,0.9) !important;
+            border:1px solid rgba(255,255,255,0.5) !important
+        }
+        
+        #file-upload-btn.button-pressed {
+            transform:scale(0.95);
+            box-shadow:0 2px 4px rgba(0,0,0,0.2)
+        }
+        
+        #custom-file-upload {display:none}
+        @media (max-width:768px) {
+            #controls {flex-direction:column;gap:8px;bottom:10px;left:10px;padding:12px;background-color:rgba(0,0,0,0.85);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.4)}
+            button.control-btn {padding:12px 16px;font-size:12px;width:100%;position:relative;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:none;overflow:visible}
+            #display-mode {top:auto;bottom:10px;left:auto;right:10px;padding:12px;background-color:rgba(0,0,0,0.85);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.4);flex-direction:column}
+            #display-mode h4 {display:none}
+            #display-mode-buttons {flex-direction:column}
+            #model-selector {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+                top: 10px;
+                left: 10px;
+                padding: 12px;
+                width: calc(100% - 180px);
+                max-width: 200px;
+                background-color: rgba(0,0,0,0.85);
+                border-radius: 10px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.4)
+            }
+            #model-selector label {display:none}
+            #share-model-btn, .display-mode-btn {padding:12px 16px;width:100%;position:relative;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:none;overflow:visible}
+            button.control-btn.active, #share-model-btn.active, .display-mode-btn.active {box-shadow:0 0 12px rgba(66,133,244,0.7);border:1px solid rgba(255,255,255,0.7);z-index:2}
+            #help-panel {width:85%;max-width:340px;top:55px;right:10px;padding:15px;font-size:13px;z-index:1500}
+            #help-icon {
+                top: 10px;
+                right: 65px;
+                width: 44px;
+                height: 44px;
+                line-height: 44px;
+                font-size: 18px;
+                z-index: 1500;
+                background-color: rgba(0,0,0,0.75);
+                box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            }
+            #help-icon:active {
+                background-color: #4285f4;
+            }
+            #custom-model-upload {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
+            #file-upload-container {flex-direction:column;align-items:flex-start}
+            
+            /* Адаптация кнопок полноэкранного режима для мобильных устройств */
+            #fullscreen-btn, #exit-fullscreen-btn {
+                width: 44px;
+                height: 44px;
+                top: 10px;
+                right: 10px;
+                z-index: 2000;
+                position: fixed !important;
+                opacity: 0.95;
+                box-shadow: 0 2px 15px rgba(0,0,0,0.6);
+            }
+            
+            #fullscreen-btn {
+                display: flex !important;
+                visibility: visible !important;
+            }
+            
+            #exit-fullscreen-btn {
+                display: none !important;
+            }
+            
+            /* Для предотвращения проблем с выходом текста за пределы селекта модели */
+            #model-selector {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+                top: 10px;
+                left: 10px;
+                padding: 12px;
+                width: calc(100% - 180px);
+                max-width: 200px;
+                background-color: rgba(0,0,0,0.85);
+                border-radius: 10px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.4)
+            }
+            
+            /* Специальные стили для select на мобильных устройствах */
+            #model-selector select {
+                width: 100%;
+                max-width: 100%;
+                padding: 10px;
+                font-size: 12px;
+                text-overflow: ellipsis;
+                overflow: hidden;
+                white-space: nowrap;
+                box-sizing: border-box;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                appearance: none;
+                background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>");
+                background-repeat: no-repeat;
+                background-position: right 5px top 50%;
+                padding-right: 30px;
+                position: relative;
+                z-index: 1;
+                border: 1px solid rgba(255,255,255,0.1);
+            }
+            
+            /* Отменяем скрытие интерфейса в полноэкранном режиме для мобильных устройств */
+            @media (max-width: 768px) {
+                .fullscreen-mode #model-selector,
+                .fullscreen-mode #controls,
+                .fullscreen-mode #display-mode,
+                .fullscreen-mode #help-icon {
+                    display: flex !important;
+                }
+                
+                .fullscreen-mode #help-icon {
+                    display: block !important;
+                }
+                
+                /* НОВЫЕ ПРАВИЛА: скрываем интерфейс в полноэкранном режиме, когда панель помощи открыта */
+                .fullscreen-mode.help-visible #model-selector,
+                .fullscreen-mode.help-visible #controls,
+                .fullscreen-mode.help-visible #display-mode {
+                    display: none !important;
+                }
+            }
+            
+            .fullscreen-mode #exit-fullscreen-btn {
+                opacity: 0.9;
+                display: flex !important;
+            }
+            
+            /* Еще более радикальное скрытие кнопки загрузки на мобильных устройствах */
+            @media (max-width: 768px) {
+                .model-upload-btn,
+                #upload-model-container,
+                /* Старые ID на случай, если script.js их использует */
+                #custom-model-upload {
+                    display: none !important;
+                    visibility: hidden !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                }
+            }
+            
+            /* Модификатор для скрытия кнопки загрузки при открытом меню помощи */
+            .help-visible .model-upload-btn,
+            .help-visible #upload-model-container,
+            /* Старые ID на случай, если script.js их использует */
+            .help-visible #custom-model-upload {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
+        }
+        @media (hover:none) {
+            button.control-btn:active, #share-model-btn:active, #file-upload-btn:active, .display-mode-btn:active {background-color:#4285f4 !important;transform:scale(0.95) !important;transition:transform 0.1s ease,background-color 0.1s ease;box-shadow:0 0 16px rgba(66,133,244,0.8) !important}
+            button.control-btn.active, #share-model-btn.active, #file-upload-btn.active {background-color:#4285f4 !important;color:white !important;font-weight:bold;box-shadow:0 0 10px rgba(66,133,244,0.6);border:1px solid rgba(255,255,255,0.5)}
+            .display-mode-btn.active {border:2px solid white !important;box-shadow:0 0 12px rgba(66,133,244,0.8) !important}
+            #toggle-control {display:none}
+            #file-upload-btn:active {
+                background-color:#4285f4 !important;
+                transform:scale(0.95) !important;
+                transition:transform 0.1s ease,background-color 0.1s ease;
+                box-shadow:0 0 16px rgba(66,133,244,0.8) !important
+            }
+        }
+        
+        /* Стили для скроллбара в WebKit браузерах (Chrome, Safari) */
+        #help-panel::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        #help-panel::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.3);
+            border-radius: 4px;
+        }
+        
+        #help-panel::-webkit-scrollbar-thumb {
+            background-color: #4285f4;
+            border-radius: 4px;
+        }
+        
+        /* ВСЕГДА скрываем кнопки загрузки в полноэкранном режиме */
+        .fullscreen-mode .model-upload-btn,
+        .fullscreen-mode #upload-model-container,
+        .fullscreen-mode #custom-model-upload {
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            position: absolute !important;
+            left: -9999px !important;
+        }
+        
+        /* Стили для разделов внутри блока display-mode */
+        .display-mode-left, .display-mode-right {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        /* Стили для кнопок */
+        .hdr-btn.active {
+            background-color: #4285f4 !important;
+            color: white !important;
+            font-weight: bold !important;
+            box-shadow: 0 0 12px rgba(66, 133, 244, 0.8) !important;
+            border: 1px solid white !important; /* Уменьшаем с 2px до 1px */
+        }
+
+        /* Дополнительные стили для HDR кнопок, чтобы они не зависели от режимов отображения */
+        .display-mode-right .display-mode-btn.active {
+            background-color: #4285f4 !important;
+            color: white !important;
+            font-weight: bold !important;
+            box-shadow: 0 0 12px rgba(66, 133, 244, 0.8) !important;
+            border: 1px solid white !important; /* Уменьшаем с 2px до 1px */
+        }
+
+        /* Отдельные стили для кнопок в левой части, чтобы они не влияли на правую */
+        .display-mode-left .display-mode-btn.active {
+            background-color: #4285f4 !important;
+            color: white !important;
+            font-weight: bold !important;
+            box-shadow: 0 0 12px rgba(66, 133, 244, 0.8) !important;
+            border: 1px solid white !important; /* Уменьшаем с 2px до 1px */
+        }
+
+        /* ВСЕГДА скрываем кнопку пропуска HDR */
+        #skipHDR {
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            position: absolute !important;
+            left: -9999px !important;
+            top: -9999px !important;
+        }
+
+        /* Стили для display-mode в десктопной версии - явно устанавливаем row */
+        #display-mode {
+            flex-direction: row !important;
+            justify-content: space-between;
+            align-items: flex-start;
+            min-width: 388px !important;
+            max-width: 430px !important;
+            padding: 15px !important;
+            gap: 7px !important;
+        }
+
+        /* Стили для заголовков секций */
+        .display-mode-left > div:first-child,
+        .display-mode-right > div:first-child {
+            padding: 5px 10px !important;
+            margin-bottom: 15px !important;
+            border-radius: 4px;
+            text-align: center !important;
+            width: 100% !important;
+            display: block !important;
+            position: relative !important;
+            background-color: transparent !important;
+            font-weight: 600 !important;
+        }
+
+        /* Стили для контейнеров с кнопками */
+        #display-mode-buttons,
+        #hdr-buttons {
+            width: 100% !important;
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 8px !important;
+        }
+
+        /* Стили для секций левой и правой */
+        .display-mode-left,
+        .display-mode-right {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            min-height: 160px !important;
+            flex: 1 !important;
+        }
+
+        .display-mode-left {
+            padding-right: 0px !important;
+            border-right: none !important;
+        }
+
+        .display-mode-right {
+            padding-left: 7px !important;
+        }
+
+        /* Стили для мобильных устройств */
+        @media (max-width:768px) {
+            #display-mode {
+                flex-direction: row !important;
+                padding: 8px !important; /* Уменьшаем общие отступы подложки */
+                min-width: auto !important;
+                max-width: none !important;
+                width: auto !important;
+                gap: 8px !important; /* Уменьшаем расстояние между блоками */
+                justify-content: space-between !important;
+            }
+            
+            .display-mode-left {
+                border-right: none !important;
+                padding-right: 0 !important;
+                margin-right: 0 !important;
+                margin-bottom: 0 !important;
+                border-bottom: none !important;
+                padding-bottom: 0 !important;
+                min-height: auto !important;
+                order: 2 !important;
+                flex: 1 !important;
+                max-width: 55% !important;
+                padding-left: 0 !important; /* Убираем отступ слева */
+            }
+            
+            .display-mode-right {
+                min-height: auto !important;
+                order: 1 !important;
+                border-right: none !important;
+                padding-right: 0 !important;
+                flex: 1 !important;
+                max-width: 42% !important;
+                padding-left: 0 !important; /* Убираем отступ слева */
+            }
+            
+            /* Делаем кнопки более компактными для мобильных устройств */
+            #display-mode .display-mode-btn {
+                padding: 10px 5px !important;
+                font-size: 13px !important;
+                margin-bottom: 5px !important;
+                font-weight: 500 !important;
+                min-height: 38px !important; /* Фиксированная минимальная высота */
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+            }
+            
+            /* Специально увеличиваем ширину кнопок отображения (левая часть) */
+            .display-mode-left .display-mode-btn {
+                width: 100% !important;
+                padding-left: 10px !important;
+                padding-right: 10px !important;
+                min-width: 100px !important;
+                box-sizing: border-box !important;
+                white-space: normal !important;
+                height: auto !important;
+                line-height: 1.3 !important;
+                text-align: center !important;
+            }
+            
+            /* Корректируем размеры кнопок HDR на мобильных */
+            .display-mode-right .display-mode-btn {
+                padding-left: 6px !important;
+                padding-right: 6px !important;
+                width: 100% !important;
+                white-space: normal !important;
+                line-height: 1.3 !important;
+                text-align: center !important;
+            }
+            
+            /* Уменьшаем отступы между кнопками */
+            #display-mode-buttons,
+            #hdr-buttons {
+                gap: 5px !important;
+                width: 100% !important;
+                padding: 0 !important; /* Убираем отступы для контейнеров кнопок */
+                margin: 0 !important;
+            }
+            
+            /* Убираем отступы заголовков */
+            .display-mode-left > div:first-child,
+            .display-mode-right > div:first-child {
+                margin-bottom: 5px !important; /* Уменьшаем отступ под заголовками */
+                padding: 0 !important;
+            }
+            
+            .display-mode-right {
+                min-height: auto !important;
+                order: 1 !important;
+                border-right: none !important;
+                padding-right: 0 !important;
+                flex: 1 !important;
+                max-width: 40% !important; /* Уменьшаем с 48% до 40% для баланса */
+            }
+            
+            /* Делаем кнопки более широкими для мобильных устройств */
+            #display-mode .display-mode-btn {
+                padding: 10px 5px !important;
+                font-size: 13px !important;
+                margin-bottom: 5px !important;
+                font-weight: 500 !important;
+            }
+            
+            /* Специально увеличиваем ширину кнопок отображения (левая часть) */
+            .display-mode-left .display-mode-btn {
+                width: 100% !important;
+                padding-left: 10px !important;
+                padding-right: 10px !important;
+                min-width: 100px !important;
+                box-sizing: border-box !important;
+                white-space: normal !important; /* Разрешаем перенос слов на новую строку */
+                height: auto !important; /* Автоматическая высота для многострочного текста */
+                line-height: 1.3 !important; /* Улучшаем высоту строки для читаемости */
+            }
+            
+            /* Уменьшаем отступы между кнопками */
+            #display-mode-buttons,
+            #hdr-buttons {
+                gap: 5px !important;
+                width: 100% !important;
+            }
+            
+            /* Делаем кнопки более компактными для мобильных устройств */
+            #display-mode .display-mode-btn {
+                padding: 10px 5px !important;
+                font-size: 13px !important; /* Увеличиваем с 12px до 13px */
+                margin-bottom: 5px !important;
+                font-weight: 500 !important; /* Делаем текст чуть более жирным */
+            }
+            
+            /* Уменьшаем толщину белой обводки для активных кнопок на мобильных устройствах */
+            #display-mode .display-mode-btn.active {
+                border: 1px solid white !important;  /* Уменьшаем с 2px до 1px */
+            }
+            
+            /* Специальные стили для hdr-btn в активном состоянии */
+            #display-mode .hdr-btn.active {
+                border: 1px solid white !important;  /* Уменьшаем с 2px до 1px */
+            }
+            
+            /* Уменьшаем отступы между кнопками */
+            #display-mode-buttons,
+            #hdr-buttons {
+                gap: 5px !important;
+                width: 100% !important;
+            }
+            
+            /* Корректируем размеры кнопок HDR на мобильных */
+            .display-mode-right .display-mode-btn {
+                padding-left: 6px !important;
+                padding-right: 6px !important;
+                width: 100% !important;
+                white-space: normal !important; /* Разрешаем перенос слов */ 
+                line-height: 1.3 !important;
+            }
+            
+            /* Стили для очень маленьких экранов */
+            @media (max-width:400px) {
+                .display-mode-left > div:first-child,
+                .display-mode-right > div:first-child {
+                    display: none !important;
+                }
+                
+                #display-mode .display-mode-btn {
+                    padding: 9px 4px !important;
+                    font-size: 12px !important;
+                    letter-spacing: -0.3px !important;
+                    font-weight: 500 !important;
+                    min-height: 34px !important; /* Фиксированная минимальная высота */
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                }
+                
+                /* Корректируем ширину кнопок для маленьких экранов */
+                .display-mode-left .display-mode-btn {
+                    min-width: 80px !important;
+                    padding-left: 5px !important;
+                    padding-right: 5px !important;
+                }
+                
+                /* Балансируем размеры секций для очень маленьких экранов */
+                .display-mode-left {
+                    max-width: 58% !important;
+                    padding: 0 !important;
+                }
+                
+                .display-mode-right {
+                    max-width: 40% !important;
+                    padding: 0 !important;
+                }
+                
+                #display-mode .display-mode-btn.active,
+                #display-mode .hdr-btn.active {
+                    border: 1px solid white !important;
+                }
+                
+                #display-mode {
+                    padding: 6px !important;
+                    gap: 4px !important;
+                }
+                
+                /* Максимально увеличиваем ширину кнопок за счет отступов */
+                #display-mode-buttons,
+                #hdr-buttons {
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    width: 100% !important;
+                }
+            }
+            
+            /* Дополнительные стили для горизонтальной ориентации мобильных устройств */
+            @media (max-height: 500px) and (orientation: landscape) {
+                #display-mode {
+                    position: absolute !important;
+                    bottom: 85px !important;
+                    left: 10px !important;
+                    max-width: 95% !important;
+                    width: auto !important;
+                    opacity: 0.9 !important;
+                }
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div class="loading">Загрузка модели...</div>
+        <button id="skipHDR">Пропустить загрузку HDR</button>
+        
+        <div id="model-selector">
+            <!-- Убираем label -->
+            <select id="model-select">
+                <option value="https://res.cloudinary.com/dd3nhch0g/image/upload/v1746037735/volkhonka_fxxptj.glb">Волхонка</option>
+            </select>
+            <button id="share-model-btn" class="control-btn" title="Скопировать ссылку на эту модель">Поделиться</button>
+        </div>
+        
+        <!-- Переименовываем элемент и добавляем класс -->
+        <div id="upload-model-container" class="model-upload-btn">
+            <input type="file" id="custom-file-upload" accept=".glb,.gltf">
+            <button id="file-upload-btn">Загрузить свою модель</button>
+        </div>
+        
+        <div id="controls" class="controls">
+            <button id="reset-camera" class="control-btn">Сброс камеры</button>
+            <button id="toggle-control" class="control-btn">WASD управление</button>
+            <div id="speed-control" style="display: none;">
+                <span>Скорость: <span id="speed-indicator">5.0</span></span>
+            </div>
+        </div>
+        
+        <div id="display-mode">
+            <h4>Отображение</h4>
+            <div id="display-mode-buttons">
+                <button class="display-mode-btn" data-mode="normal">Обычный</button>
+                <button class="display-mode-btn" data-mode="wireframe">Каркас</button>
+                <button class="display-mode-btn" data-mode="wireframe-solid">Скетч</button>
+            </div>
+        </div>
+        
+        <!-- Добавляем кнопку перехода в полноэкранный режим -->
+        <button id="fullscreen-btn">
+            <svg style="width: 16px; height: 16px;" viewBox="0 0 24 24">
+                <path fill="currentColor" d="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z" />
+            </svg>
+        </button>
+        
+        <!-- Добавляем кнопку выхода из полноэкранного режима (скрыта по умолчанию) -->
+        <button id="exit-fullscreen-btn">
+            <svg style="width: 16px; height: 16px;" viewBox="0 0 24 24">
+                <path fill="currentColor" d="M14,14H19V16H16V19H14V14M5,14H10V19H8V16H5V14M8,5H10V10H5V8H8V5M19,8V10H14V5H16V8H19Z" />
+            </svg>
+        </button>
+        
+        <div id="help-icon">?</div>
+        <div id="help-panel">
+            <h3>Управление</h3>
+            
+            <div class="help-section">
+                <h4>Стандартный режим</h4>
+                <div class="help-row">
+                    <span>Вращение:</span>
+                    <span>LMB</span>
+                </div>
+                <div class="help-row">
+                    <span>Панорамирование:</span>
+                    <span>RMB</span>
+                </div>
+                <div class="help-row">
+                    <span>Масштабирование:</span>
+                    <span>MB</span>
+                </div>
+            </div>
+            
+            <div class="help-section">
+                <h4>Режим WASD</h4>
+                <div class="help-row">
+                    <span>Перемещение:</span>
+                    <span>W A S D</span>
+                </div>
+                <div class="help-row">
+                    <span>Подъем/спуск:</span>
+                    <span>Q E</span>
+                </div>
+                <div class="help-row">
+                    <span>Вращение:</span>
+                    <span>LMB</span>
+                </div>
+                <div class="help-row">
+                    <span>Скорость:</span>
+                    <span>MB</span>
+                </div>
+                <div class="help-row">
+                    <span>Ускорение:</span>
+                    <span>Shift</span>
+                </div>
+                <div class="help-row">
+                    <span>Свободный полёт:</span>
+                    <span>Shift+Q/E</span>
+                </div>
+            </div>
+            
+            <div class="help-section">
+                <h4>Отображение</h4>
+                <div class="help-row">
+                    <span>Обычный:</span>
+                    <span>Текстуры</span>
+                </div>
+                <div class="help-row">
+                    <span>Каркас:</span>
+                    <span>Сетка</span>
+                </div>
+                <div class="help-row">
+                    <span>Скетч:</span>
+                    <span>Ребра</span>
+                </div>
+            </div>
+
+            
+            <div class="help-section">
+                <h4>Горячие клавиши</h4>
+                <div class="help-row">
+                    <span>Отображение:</span>
+                    <span>1 2 3</span>
+                </div>
+                <div class="help-row">
+                    <span>Освещение:</span>
+                    <span>4 5 6</span>
+                </div>
+                <div class="help-row">
+                    <span>Сброс камеры:</span>
+                    <span>R</span>
+                </div>
+                <div class="help-row">
+                    <span>Помощь:</span>
+                    <span>H</span>
+                </div>
+                <div class="help-row">
+                    <span>WASD режим:</span>
+                    <span>G</span>
+                </div>
+                <div class="help-row">
+                    <span>Полный экран:</span>
+                    <span>F ESC</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Добавляем скрипт Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://upload-widget.cloudinary.com/global/all.js" type="text/javascript"></script>
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        // Функция для проверки и скрытия кнопки загрузки модели на мобильных устройствах
+        let isHelpPanelVisible = false;
+        let isFullscreenMode = false;
+        
+        function checkAndHideUploadButton() {
+            const isMobile = window.matchMedia('(max-width: 768px)').matches;
+            const customModelUpload = document.getElementById('custom-model-upload');
+            
+            if (customModelUpload && isMobile) {
+                customModelUpload.style.display = 'none';
+                console.log('Проверка: скрываем кнопку загрузки модели (мобильная версия)');
+            }
+            // Больше не используем для десктопной версии, так как используем класс help-visible 
+        }
+        
+        // Глобальная функция для обновления видимости кнопки загрузки моделей
+        function updateUploadButtonVisibility() {
+            const uploadBtn = document.getElementById('upload-model-container');
+            const isMobile = window.matchMedia('(max-width: 768px)').matches;
+            
+            if (!uploadBtn) return;
+            
+            if (isMobile) {
+                // На мобильных всегда скрываем
+                uploadBtn.style.display = 'none';
+            } else if (isHelpPanelVisible) {
+                // На десктопе скрываем, если открыта панель помощи
+                uploadBtn.style.display = 'none';
+                console.log('СКРЫВАЕМ кнопку загрузки моделей (help panel visible)');
+            } else {
+                // На десктопе показываем, если панель помощи закрыта
+                uploadBtn.style.display = 'flex';
+                console.log('ПОКАЗЫВАЕМ кнопку загрузки моделей (help panel hidden)');
+            }
+        }
+        
+        // Функция для входа в полноэкранный режим
+        function enterFullscreenMode() {
+            const container = document.getElementById('container');
+            
+            // Добавляем класс для стилей полноэкранного режима
+            container.classList.add('fullscreen-mode');
+            isFullscreenMode = true;
+            
+            // Всегда скрываем кнопки загрузки модели в полноэкранном режиме
+            const uploadBtns = [
+                document.getElementById('upload-model-container'),
+                document.getElementById('custom-model-upload')
+            ];
+            
+            uploadBtns.forEach(btn => {
+                if (btn) {
+                    btn.setAttribute('style', 'display: none !important; visibility: hidden !important; opacity: 0 !important;');
+                    console.log('Скрываем кнопку загрузки модели при входе в полноэкранный режим:', btn.id);
+                }
+            });
+            
+            // Меняем видимость кнопок
+            const fullscreenBtn = document.getElementById('fullscreen-btn');
+            const exitFullscreenBtn = document.getElementById('exit-fullscreen-btn');
+            
+            if (fullscreenBtn) fullscreenBtn.style.display = 'none';
+            if (exitFullscreenBtn) exitFullscreenBtn.style.display = 'flex';
+            
+            // Запускаем нативный полноэкранный режим только в ответ на действие пользователя
+            try {
+                // Для предотвращения ошибки "can only be initiated by a user gesture"
+                // мы не запускаем автоматически полноэкранный режим, а только стилизуем страницу
+                console.log("Включен программный полноэкранный режим");
+            } catch (error) {
+                console.log("Ошибка программного полноэкранного режима:", error);
+            }
+        }
+        
+        // Функция для выхода из полноэкранного режима
+        function exitFullscreenMode() {
+            const container = document.getElementById('container');
+            
+            // Удаляем класс для стилей полноэкранного режима
+            container.classList.remove('fullscreen-mode');
+            isFullscreenMode = false;
+            
+            // Показываем кнопки загрузки модели ТОЛЬКО если не открыта панель помощи
+            if (!isHelpPanelVisible) {
+                const uploadBtns = [
+                    document.getElementById('upload-model-container'),
+                    document.getElementById('custom-model-upload')
+                ];
+                
+                const isMobile = window.matchMedia('(max-width: 768px)').matches;
+                
+                if (!isMobile) {
+                    uploadBtns.forEach(btn => {
+                        if (btn) {
+                            btn.setAttribute('style', 'display: flex !important; visibility: visible !important; opacity: 1 !important;');
+                            console.log('Показываем кнопку загрузки модели при выходе из полноэкранного режима:', btn.id);
+                        }
+                    });
+                }
+            }
+            
+            // Меняем видимость кнопок
+            const fullscreenBtn = document.getElementById('fullscreen-btn');
+            const exitFullscreenBtn = document.getElementById('exit-fullscreen-btn');
+            
+            if (fullscreenBtn) fullscreenBtn.style.display = 'flex';
+            if (exitFullscreenBtn) exitFullscreenBtn.style.display = 'none';
+            
+            // Выход из нативного полноэкранного режима, если он активен
+            try {
+                // Проверяем, находимся ли мы в полноэкранном режиме
+                if (document.fullscreenElement || 
+                    document.webkitFullscreenElement || 
+                    document.mozFullScreenElement || 
+                    document.msFullscreenElement) {
+                    
+                    // Выходим из полноэкранного режима соответствующим методом
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    } else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    } else if (document.mozCancelFullScreen) {
+                        document.mozCancelFullScreen();
+                    } else if (document.msExitFullscreen) {
+                        document.msExitFullscreen();
+                    }
+                }
+            } catch (error) {
+                console.log("Ошибка выхода из полноэкранного режима:", error);
+            }
+        }
+        
+        // Обновленная функция для отслеживания состояния панели помощи
+        function setupHelpPanelTracking() {
+            const helpIcon = document.getElementById('help-icon');
+            const helpPanel = document.getElementById('help-panel');
+            
+            if (helpIcon && helpPanel) {
+                // Отслеживаем клики по кнопке помощи
+                helpIcon.addEventListener('click', function() {
+                    toggleHelpPanel();
+                });
+                
+                // Отслеживаем клики вне панели помощи, чтобы закрыть её
+                document.addEventListener('click', function(event) {
+                    if (isHelpPanelVisible && 
+                        helpPanel && 
+                        !helpPanel.contains(event.target) && 
+                        helpIcon && 
+                        !helpIcon.contains(event.target)) {
+                        
+                        toggleHelpPanel();
+                    }
+                });
+            }
+        }
+        
+        // Функция переключения видимости панели помощи
+        function toggleHelpPanel() {
+            const container = document.getElementById('container');
+            const helpPanel = document.getElementById('help-panel');
+            const modelSelector = document.getElementById('model-selector');
+            const controls = document.getElementById('controls');
+            const displayMode = document.getElementById('display-mode');
+            
+            // Обрабатываем оба возможных ID элемента
+            const uploadModelBtns = [
+                document.getElementById('upload-model-container'),
+                document.getElementById('custom-model-upload')
+            ];
+            
+            if (!helpPanel || !container) {
+                console.error('Панель помощи или контейнер не найдены');
+                return;
+            }
+            
+            isHelpPanelVisible = !isHelpPanelVisible;
+            helpPanel.style.display = isHelpPanelVisible ? 'block' : 'none';
+            
+            // Добавляем/удаляем класс для контейнера
+            if (isHelpPanelVisible) {
+                container.classList.add('help-visible');
+                
+                // Принудительно скрываем кнопку загрузки модели
+                uploadModelBtns.forEach(btn => {
+                    if (btn) {
+                        btn.setAttribute('style', 'display: none !important; visibility: hidden !important; opacity: 0 !important;');
+                        console.log('Принудительно скрываем кнопку загрузки модели при открытии помощи:', btn.id);
+                    }
+                });
+            } else {
+                container.classList.remove('help-visible');
+                
+                // Принудительно показываем кнопку загрузки модели ТОЛЬКО если не в полноэкранном режиме
+                const isMobile = window.matchMedia('(max-width: 768px)').matches;
+                if (!isMobile && !isFullscreenMode) {
+                    uploadModelBtns.forEach(btn => {
+                        if (btn) {
+                            btn.setAttribute('style', 'display: flex !important; visibility: visible !important; opacity: 1 !important;');
+                            console.log('Принудительно показываем кнопку загрузки модели при закрытии помощи:', btn.id);
+                        }
+                    });
+                } else {
+                    // В полноэкранном режиме или на мобильных продолжаем скрывать кнопку
+                    uploadModelBtns.forEach(btn => {
+                        if (btn) {
+                            btn.setAttribute('style', 'display: none !important; visibility: hidden !important; opacity: 0 !important;');
+                            console.log('Кнопка загрузки остается скрытой в полноэкранном режиме или на мобильных:', btn.id);
+                        }
+                    });
+                }
+            }
+            
+            // Обновляем видимость элементов на мобильных устройствах
+            const isMobile = window.matchMedia('(max-width: 768px)').matches;
+            if (isMobile) {
+                // На мобильных устройствах скрываем кнопку загрузки всегда
+                uploadModelBtns.forEach(btn => {
+                    if (btn) {
+                        btn.setAttribute('style', 'display: none !important; visibility: hidden !important; opacity: 0 !important;');
+                    }
+                });
+                
+                // Скрываем/показываем основные элементы интерфейса
+                if (modelSelector) {
+                    modelSelector.style.display = isHelpPanelVisible ? 'none' : 'flex';
+                }
+                if (controls) {
+                    controls.style.display = isHelpPanelVisible ? 'none' : 'flex';
+                }
+                if (displayMode) {
+                    displayMode.style.display = isHelpPanelVisible ? 'none' : 'flex';
+                }
+                
+                // Если закрываем панель помощи в полноэкранном режиме, принудительно восстанавливаем
+                // элементы интерфейса, так как они могли быть скрыты через !important атрибуты
+                if (!isHelpPanelVisible && isFullscreenMode) {
+                    setTimeout(() => {
+                        if (modelSelector) modelSelector.setAttribute('style', 'display: flex !important');
+                        if (controls) controls.setAttribute('style', 'display: flex !important');
+                        if (displayMode) displayMode.setAttribute('style', 'display: flex !important');
+                    }, 10);
+                }
+            }
+        }
+        
+        // Настраиваем кнопки полноэкранного режима
+        function setupFullscreenButtons() {
+            const fullscreenBtn = document.getElementById('fullscreen-btn');
+            const exitFullscreenBtn = document.getElementById('exit-fullscreen-btn');
+            
+            if (fullscreenBtn) {
+                fullscreenBtn.addEventListener('click', function(event) {
+                    // Сначала активируем программный полноэкранный режим
+                    enterFullscreenMode();
+                    
+                    // Затем, после действия пользователя, запускаем нативный полноэкранный режим
+                    const container = document.getElementById('container');
+                    try {
+                        if (container.requestFullscreen) {
+                            container.requestFullscreen();
+                        } else if (container.webkitRequestFullscreen) {
+                            container.webkitRequestFullscreen();
+                        } else if (container.msRequestFullscreen) {
+                            container.msRequestFullscreen();
+                        }
+                    } catch (error) {
+                        console.log("Ошибка запуска нативного полноэкранного режима:", error);
+                    }
+                });
+            }
+            
+            if (exitFullscreenBtn) {
+                exitFullscreenBtn.addEventListener('click', exitFullscreenMode);
+                // Скрываем кнопку выхода изначально
+                exitFullscreenBtn.style.display = 'none';
+            }
+            
+            // Отслеживаем изменение состояния полноэкранного режима
+            document.addEventListener('fullscreenchange', handleFullscreenChange);
+            document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+            document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+            document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+            
+            // Отслеживаем нажатие клавиши ESC для выхода из полноэкранного режима
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && isFullscreenMode) {
+                    exitFullscreenMode();
+                }
+                
+                // Добавляем поддержку клавиши F для входа в полноэкранный режим
+                if ((e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А')) {
+                    if (!isFullscreenMode) {
+                        enterFullscreenMode();
+                    }
+                    
+                    // Нельзя запустить нативный полноэкранный режим по нажатию клавиш
+                    // без прямого взаимодействия пользователя с кнопкой
+                }
+                
+                // Клавиша H для показа/скрытия панели помощи (включая русскую Р)
+                if (e.key === 'h' || e.key === 'H' || e.key === 'р' || e.key === 'Р') {
+                    toggleHelpPanel();
+                }
+                
+                // Клавиша R для сброса камеры (включая русскую К) - полностью переработанная версия
+                if (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') {
+                    console.log('Нажата клавиша R/К');
+                    
+                    // Прямой доступ к кнопке сброса камеры
+                    const resetCameraBtn = document.getElementById('reset-camera');
+                    
+                    if (resetCameraBtn) {
+                        console.log('Кнопка сброса камеры найдена, имитируем клик');
+                        
+                        // Создаем и запускаем событие клика
+                        const clickEvent = new MouseEvent('click', {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        });
+                        
+                        // Явно вызываем клик
+                        resetCameraBtn.dispatchEvent(clickEvent);
+                    } else if (typeof window.resetCamera === 'function') {
+                        // Если кнопка не найдена, но есть функция resetCamera
+                        console.log('Используем функцию window.resetCamera');
+                        window.resetCamera(); // Без параметра для анимации
+                    } else {
+                        console.log('Кнопка сброса камеры не найдена и функция resetCamera недоступна');
+                    }
+                    
+                    // Включаем автовращение в стандартном режиме
+                    if (window.controlMode === 'orbit' && window.controls && typeof window.controls.autoRotate !== 'undefined') {
+                        console.log('Включаем автовращение');
+                        window.controls.autoRotate = true;
+                    }
+                }
+                
+                // Клавиша F для полноэкранного режима (включая русскую А)
+                if (e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А') {
+                    if (typeof window.isFullscreenMode !== 'undefined' && window.isFullscreenMode) {
+                        console.log('Выход из полноэкранного режима (HTML обработчик)');
+                        if (typeof window.exitFullscreenMode === 'function') {
+                            window.exitFullscreenMode();
+                        } else {
+                            exitFullscreenMode();
+                        }
+                    } else {
+                        console.log('Вход в полноэкранный режим (HTML обработчик)');
+                        if (typeof window.enterFullscreenMode === 'function') {
+                            window.enterFullscreenMode();
+                        } else {
+                            enterFullscreenMode();
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Обработчик изменений состояния полноэкранного режима
+        function handleFullscreenChange() {
+            if (!document.fullscreenElement && 
+                !document.webkitFullscreenElement && 
+                !document.mozFullScreenElement && 
+                !document.msFullscreenElement) {
+                
+                // Если вышли из полноэкранного режима через ESC или другой метод
+                if (isFullscreenMode) {
+                    exitFullscreenMode();
+                }
+            }
+        }
+        
+        // Проверим видимость кнопки при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAndHideUploadButton();
+            setupHelpPanelTracking();
+            setupFullscreenButtons();
+            
+            // Вызываем функцию для обновления видимости кнопки загрузки моделей
+            updateUploadButtonVisibility();
+            
+            // Инициализируем глобальные функции для камеры
+            setupCameraControlsGlobally();
+            
+            // Дополнительная проверка для кнопки загрузки своей модели
+            setTimeout(function() {
+                // Еще раз проверяем, так как DOM мог измениться
+                updateUploadButtonVisibility();
+            }, 100);
+        });
+
+        // Проверим при изменении размера окна
+        window.addEventListener('resize', function() {
+            checkAndHideUploadButton();
+            
+            // Обновляем состояние кнопки загрузки моделей
+            updateUploadButtonVisibility();
+        });
+        
+        
+        // Экспортируем функции для использования в главном скрипте
+        window.checkAndHideUploadButton = checkAndHideUploadButton;
+        window.isHelpPanelVisible = isHelpPanelVisible;
+        window.enterFullscreenMode = enterFullscreenMode;
+        window.exitFullscreenMode = exitFullscreenMode;
+        window.isFullscreenMode = isFullscreenMode;
+        window.toggleHelpPanel = toggleHelpPanel;
+        window.updateUploadButtonVisibility = updateUploadButtonVisibility;
+
+        // Функция onTelegramAuth удалена, поскольку проверка подписки больше не нужна
+    </script>
+    <script type="module" src="https://res.cloudinary.com/dd3nhch0g/raw/upload/v1753796747/script_bd2q38.js"></script>
+    
+    <!-- Глобальная функция для обработки камеры и управления -->
+    <script>
+        // Функция для экспорта функций из script.js в глобальный объект
+        function setupCameraControlsGlobally() {
+            // Проверяем загрузку основного скрипта
+            if (typeof window.controls !== 'undefined') {
+                // Функция для переключения автовращения
+                window.toggleAutoRotate = function() {
+                    if (window.controls && window.controlMode === 'orbit') {
+                        window.controls.autoRotate = !window.controls.autoRotate;
+                        console.log('Автовращение: ' + (window.controls.autoRotate ? 'включено' : 'выключено'));
+                    }
+                };
+                
+                // Проверяем и расширяем функцию сброса камеры
+                if (typeof window.resetCamera === 'function') {
+                    console.log('Расширяем существующую функцию resetCamera для включения автовращения');
+                    
+                    // Сохраняем оригинальную функцию
+                    const originalResetCamera = window.resetCamera;
+                    
+                    // Переопределяем для добавления автовращения в режиме orbit
+                    window.resetCamera = function(immediate) {
+                        // Вызываем оригинальную функцию с переданным параметром
+                        originalResetCamera(immediate);
+                        
+                        // Дополнительно включаем автовращение, если в обычном режиме
+                        if (window.controls && window.controlMode === 'orbit') {
+                            window.controls.autoRotate = true;
+                        }
+                    };
+                } else {
+                    // Если функция resetCamera не существует, создаем ее с нуля
+                    console.log('Создаем функцию resetCamera, так как она не существует');
+                    
+                    window.resetCamera = function(immediate) {
+                        // Сбрасываем камеру в WASD режиме, устанавливая ее в начальное положение
+                        if (window.camera && window.initialCameraPosition) {
+                            window.camera.position.copy(window.initialCameraPosition);
+                            
+                            if (window.initialCameraQuaternion) {
+                                window.camera.quaternion.copy(window.initialCameraQuaternion);
+                            }
+                            
+                            if (window.targetRotationX !== undefined && window.targetRotationY !== undefined) {
+                                if (window.initialCameraQuaternion) {
+                                    const euler = new THREE.Euler().setFromQuaternion(window.initialCameraQuaternion, 'YXZ');
+                                    window.targetRotationX = euler.y;
+                                    window.targetRotationY = euler.x;
+                                }
+                            }
+                            
+                            if (window.controls) {
+                                if (window.initialTarget) {
+                                    window.controls.target.copy(window.initialTarget);
+                                }
+                                window.controls.update();
+                                
+                                // Включаем автовращение в обычном режиме
+                                if (window.controlMode === 'orbit') {
+                                    window.controls.autoRotate = true;
+                                }
+                            }
+                        }
+                    };
+                }
+                
+                console.log('Функции камеры доступны глобально');
+
+                // Добавляем глобальный обработчик клавиши R, если его еще нет
+                if (!window.rKeyHandlerAdded) {
+                    window.addEventListener('keydown', function(e) {
+                        // Обработка клавиши R (включая русскую К)
+                        if ((e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') && 
+                            typeof window.resetCamera === 'function') {
+                            console.log('Обработка клавиши R/К в глобальном обработчике HTML');
+                            
+                            // Вызываем сброс камеры с анимацией
+                            window.resetCamera();
+                            
+                            // Включаем автовращение в режиме orbit
+                            if (window.controls && window.controlMode === 'orbit') {
+                                window.controls.autoRotate = true;
+                                console.log('Автовращение включено');
+                            }
+                        }
+                    });
+                    
+                    window.rKeyHandlerAdded = true;
+                }
+
+                // Добавляем глобальный обработчик клавиши F, если его еще нет
+                if (!window.fKeyHandlerAdded) {
+                    window.addEventListener('keydown', function(e) {
+                        // Обработка клавиши F (включая русскую А)
+                        if ((e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А')) {
+                            console.log('Обработка клавиши F/А в глобальном обработчике HTML');
+                            
+                            // Переключаем полноэкранный режим
+                            if (typeof window.isFullscreenMode !== 'undefined' && window.isFullscreenMode) {
+                                if (typeof window.exitFullscreenMode === 'function') {
+                                    console.log('Выход из полноэкранного режима');
+                                    window.exitFullscreenMode();
+                                }
+                            } else {
+                                if (typeof window.enterFullscreenMode === 'function') {
+                                    console.log('Вход в полноэкранный режим');
+                                    window.enterFullscreenMode();
+                                }
+                            }
+                        }
+                    });
+                    
+                    window.fKeyHandlerAdded = true;
+                }
+                
+                // Фикс для кнопок HDR при переключении режимов отображения
+                fixHDRButtonsDisplay();
+            } else {
+                // Повторяем попытку через небольшой промежуток времени
+                setTimeout(setupCameraControlsGlobally, 100);
+            }
+        }
+        
+        // Функция для исправления проблемы с кнопками HDR
+        function fixHDRButtonsDisplay() {
+            // Храним последний активный индекс HDR
+            let lastActiveHDRIndex = 0;
+
+            // Обновляем сохраненный индекс HDR при клике на кнопку HDR
+            document.addEventListener('click', function(e) {
+                if (e.target && e.target.classList.contains('hdr-btn') && e.target.dataset.hdrIndex) {
+                    lastActiveHDRIndex = parseInt(e.target.dataset.hdrIndex);
+                    console.log('Сохраняем индекс HDR:', lastActiveHDRIndex);
+                }
+            });
+
+            // Наблюдаем за изменениями в дереве DOM
+            const observer = new MutationObserver(function(mutations) {
+                // Ищем изменения класса active у кнопок
+                mutations.forEach(function(mutation) {
+                    if (mutation.type === 'attributes' && 
+                        mutation.attributeName === 'class' &&
+                        mutation.target.classList.contains('display-mode-btn') &&
+                        !mutation.target.classList.contains('hdr-btn')) {
+                        
+                        // Если изменилась кнопка режима отображения, восстанавливаем активную HDR кнопку
+                        setTimeout(function() {
+                            restoreActiveHDRButton(lastActiveHDRIndex);
+                        }, 10);
+                    }
+                });
+            });
+            
+            // Функция для восстановления активной HDR кнопки с указанным индексом
+            function restoreActiveHDRButton(index) {
+                const hdrButtons = document.querySelectorAll('.hdr-btn');
+                const activeHDRExists = Array.from(hdrButtons).some(btn => btn.classList.contains('active'));
+                
+                if (!activeHDRExists && hdrButtons.length > 0) {
+                    // Находим кнопку с нужным индексом
+                    const targetButton = Array.from(hdrButtons).find(btn => 
+                        parseInt(btn.dataset.hdrIndex) === index
+                    );
+                    
+                    // Если кнопка найдена, активируем ее, иначе активируем первую
+                    const buttonToActivate = targetButton || hdrButtons[0];
+                    
+                    console.log('Восстанавливаем активную HDR кнопку с индексом:', 
+                        targetButton ? index : 0);
+                    
+                    buttonToActivate.classList.add('active');
+                    
+                    // Не вызываем changeHDR, чтобы не менять фактическое освещение
+                    // Мы только восстанавливаем визуальное состояние кнопки
+                }
+            }
+            
+            // Запускаем наблюдатель для всего документа
+            observer.observe(document.body, { 
+                childList: true, 
+                subtree: true, 
+                attributes: true,
+                attributeFilter: ['class']
+            });
+            
+            // Также добавляем обработчики на кнопки режимов отображения
+            document.querySelectorAll('.display-mode-btn:not(.hdr-btn)').forEach(button => {
+                button.addEventListener('click', function() {
+                    // При клике на кнопку режима, проверяем и восстанавливаем активную HDR кнопку
+                    setTimeout(function() {
+                        restoreActiveHDRButton(lastActiveHDRIndex);
+                    }, 50);
+                });
+            });
+
+            // Инициализируем lastActiveHDRIndex текущей активной кнопкой при запуске
+            setTimeout(function() {
+                const activeHDRButton = document.querySelector('.hdr-btn.active');
+                if (activeHDRButton && activeHDRButton.dataset.hdrIndex) {
+                    lastActiveHDRIndex = parseInt(activeHDRButton.dataset.hdrIndex);
+                    console.log('Начальный индекс HDR:', lastActiveHDRIndex);
+                }
+            }, 1000); // Даем время на загрузку интерфейса
+        }
+        
+        // Запускаем настройку после загрузки DOM
+        document.addEventListener('DOMContentLoaded', function() {
+            // Запускаем с небольшой задержкой, чтобы основной скрипт успел загрузиться
+            setTimeout(setupCameraControlsGlobally, 500);
+            
+            // Настраиваем скроллинг для панели помощи
+            const helpPanel = document.getElementById('help-panel');
+            if (helpPanel) {
+                // Обработчик для колеса мыши над панелью помощи
+                helpPanel.addEventListener('wheel', function(event) {
+                    // Предотвращаем прокрутку страницы и модели
+                    event.stopPropagation();
+                    
+                    // Проверяем, нужно ли предотвратить прокрутку
+                    const scrollTop = helpPanel.scrollTop;
+                    const scrollHeight = helpPanel.scrollHeight;
+                    const clientHeight = helpPanel.clientHeight;
+                    
+                    // Разрешаем скроллить панель только если она не достигла краев
+                    // или если скролл идет в обратном направлении
+                    if ((scrollTop <= 0 && event.deltaY < 0) || 
+                        (scrollTop + clientHeight >= scrollHeight && event.deltaY > 0)) {
+                        // В этих случаях предотвращаем прокрутку
+                        event.preventDefault();
+                    }
+                }, { passive: false });
+                
+                // Дополнительно блокируем прокрутку страницы при скролле на панели
+                helpPanel.addEventListener('mouseover', function() {
+                    // Блокируем прокрутку страницы, когда мышь над панелью
+                    document.body.style.overflow = 'hidden';
+                    // Отключаем обработку колеса мыши для контейнера
+                    if (window.container) {
+                        window.container.removeEventListener('wheel', window.handleMouseWheel);
+                    }
+                });
+                
+                helpPanel.addEventListener('mouseout', function() {
+                    // Восстанавливаем прокрутку страницы
+                    document.body.style.overflow = '';
+                    // Восстанавливаем обработку колеса мыши для контейнера
+                    if (window.container && window.handleMouseWheel) {
+                        window.container.addEventListener('wheel', window.handleMouseWheel);
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html> 
