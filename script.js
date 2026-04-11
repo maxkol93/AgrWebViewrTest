@@ -91,8 +91,6 @@ async function fetchModelsFromSupabase() {
         clearModelSelector();
 
         if (data.length === 0) {
-            console.log('Список моделей пуст, добавляем стандартную модель');
-            addDefaultModel();
             document.querySelector('.loading').style.display = 'none';
             return;
         }
@@ -553,13 +551,9 @@ function loadModelsFromLocalStorage() {
             });
             
             console.log('Загружено моделей из localStorage:', userModels.length);
-        } else {
-            // Если нет сохраненных моделей, добавляем стандартную модель
-            addDefaultModel();
         }
     } catch (error) {
         console.error('Ошибка при загрузке моделей из localStorage:', error);
-        addDefaultModel();
     }
 }
 
