@@ -7,8 +7,6 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <!-- URL для JSON файла с моделями -->
-    <meta id="models-json-url" name="models-json-url" content="https://res.cloudinary.com/dd3nhch0g/raw/upload/v1746464660/3d_models_svb9sm.JSON">
     <!-- Конфигурация Supabase -->
     <meta id="supabase-url" name="supabase-url" content="SUPABASE_URL_PLACEHOLDER">
     <meta id="supabase-key" name="supabase-key" content="SUPABASE_KEY_PLACEHOLDER">
@@ -870,7 +868,6 @@
         <div id="model-selector">
             <!-- Убираем label -->
             <select id="model-select">
-                <option value="https://res.cloudinary.com/dd3nhch0g/image/upload/v1746037735/volkhonka_fxxptj.glb">Волхонка</option>
             </select>
             <button id="share-model-btn" class="control-btn" title="Скопировать ссылку на эту модель">Поделиться</button>
         </div>
@@ -1009,7 +1006,6 @@
 
     <!-- Добавляем скрипт Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="https://upload-widget.cloudinary.com/global/all.js" type="text/javascript"></script>
     <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
     <script type="importmap">
     {
