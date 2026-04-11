@@ -213,8 +213,7 @@ async function uploadModelToSupabase(file) {
             name: file.name,
             file_path: filePath,
             format: format,
-            size: file.size,
-            url: urlData.publicUrl
+            size: file.size
         };
 
 
