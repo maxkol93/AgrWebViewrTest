@@ -4172,7 +4172,7 @@ function exportFunctions() {
 }
 
 // Инициализируем обработчики после загрузки DOM
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     console.log('🚀 Инициализация 3D просмотрщика...');
     
     // Проверяем совместимость с HTML функциями
@@ -4196,9 +4196,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Telegram функции авторизации и проверки подписки удалены
     
-    // Инициализируем Supabase
+    // Инициализируем Supabase и дожидаемся загрузки списка моделей,
+    // чтобы 3D-сцена инициализировалась уже с готовым списком
     if (initSupabase()) {
-        fetchModelsFromSupabase();
+        await fetchModelsFromSupabase();
     } else {
         loadModelsFromLocalStorage();
     }
