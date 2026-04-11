@@ -1310,24 +1310,21 @@ function updateWASDControls() {
 let currentModelPath = '';
 
 const USE_HDR = true;
-// Список HDR карт
+// Список HDR карт (файлы лежат в Supabase Storage, бакет "environments")
 const HDR_MAPS = [
-    {
-        name: 'Закат', 
-        url: 'https://res.cloudinary.com/dd3nhch0g/raw/upload/v1746050555/sunset_jhbcentral_1k_v3an44.hdr'
-    },
-    {
-        name: 'День', 
-        url: 'https://res.cloudinary.com/dd3nhch0g/raw/upload/v1747156248/wide_street_01_1k_skbrws.hdr'
-    },
-    {
-        name: 'Ночь', 
-        url: 'https://res.cloudinary.com/dd3nhch0g/raw/upload/v1747156243/solitude_night_1k_p50cta.hdr'
-    }
+    { name: 'Закат', path: 'sunset.hdr' },
+    { name: 'День',  path: 'day.hdr' },
+    { name: 'Ночь',  path: 'night.hdr' }
 ];
 
 let currentHdrIndex = 0;
-const HDR_PATH = HDR_MAPS[currentHdrIndex].url;
+
+function getHdrUrl(path) {
+    if (!supabase && !initSupabase()) {
+        throw new Error('Supabase не инициализирован, невозможно получить URL HDR');
+    }
+    return supabase.storage.from('environments').getPublicUrl(path).data.publicUrl;
+}
 
 // Инициализация 3D сцены перенесена в основной блок DOMContentLoaded
 
@@ -1460,7 +1457,7 @@ function createEnvironment() {
             }
         };
         
-        loadHDR(HDR_MAPS[currentHdrIndex].url, pmremGenerator, rgbeLoader, hdrLoading);
+        loadHDR(getHdrUrl(HDR_MAPS[currentHdrIndex].path), pmremGenerator, rgbeLoader, hdrLoading);
     } else {
         createBasicEnvironment(pmremGenerator);
     }
@@ -1526,7 +1523,7 @@ function changeHDR(index) {
     rgbeLoader.setDataType(THREE.HalfFloatType);
     
     // Загружаем HDR без отображения процесса загрузки
-    loadHDR(HDR_MAPS[currentHdrIndex].url, pmremGenerator, rgbeLoader, true);
+    loadHDR(getHdrUrl(HDR_MAPS[currentHdrIndex].path), pmremGenerator, rgbeLoader, true);
 }
 
 // Функция для создания интерфейса HDR
