@@ -557,27 +557,6 @@ function loadModelsFromLocalStorage() {
     }
 }
 
-// Функция для добавления стандартной модели
-function addDefaultModel() {
-    const defaultModel = {
-        url: "https://res.cloudinary.com/dd3nhch0g/image/upload/v1746037735/volkhonka_fxxptj.glb",
-        name: "volkhonka.glb",
-        uploadedAt: new Date().toISOString(),
-        size: 50000000,
-        format: "glb"
-    };
-    
-    // Очищаем существующий список моделей
-    clearModelSelector();
-    
-    // Добавляем стандартную модель
-    userModels = [defaultModel];
-    addModelToSelector(defaultModel);
-    
-    // Сохраняем в localStorage
-    localStorage.setItem('userModels', JSON.stringify(userModels));
-}
-
 // Функция для очистки выпадающего списка моделей
 function clearModelSelector() {
     const modelSelect = document.getElementById('model-select');
