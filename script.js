@@ -10,266 +10,162 @@ let isHelpPanelVisible = false;
 
 // Проверка совместимости с HTML функциями перенесена в основной блок инициализации
 
-// Настройки Supabase
-let SUPABASE_URL = 'https://ваш-проект-url.supabase.co';
-let SUPABASE_ANON_KEY = 'ваш-публичный-ключ';
-let supabase = null;
+// Настройки Yandex Object Storage
+let STORAGE_BASE_URL = '';
+let API_BASE_URL = '';
+let storageConfigured = false;
 
 let fileUploadRequested = false; // Флаг запроса на загрузку файла пользователем
 
+function initStorage() {
+    const storageMeta = document.getElementById('storage-base-url');
+    const apiMeta = document.getElementById('api-base-url');
 
+    if (storageMeta && storageMeta.getAttribute('content')) {
+        STORAGE_BASE_URL = storageMeta.getAttribute('content').replace(/\/+$/, '');
+    }
+    if (apiMeta && apiMeta.getAttribute('content')) {
+        API_BASE_URL = apiMeta.getAttribute('content').replace(/\/+$/, '');
+    }
 
-// Инициализация Supabase
-function initSupabase() {
-    if (!window.supabase) {
-        console.error('Библиотека Supabase не загружена');
+    if (!STORAGE_BASE_URL || !API_BASE_URL ||
+        STORAGE_BASE_URL.includes('PLACEHOLDER') || API_BASE_URL.includes('PLACEHOLDER')) {
+        console.error('Конфигурация хранилища не настроена. Установите storage-base-url и api-base-url в мета-тегах.');
+        storageConfigured = false;
         return false;
     }
-    
-    // Получаем URL и ключ из мета-тегов, если они есть
-    const urlElement = document.getElementById('supabase-url');
-    const keyElement = document.getElementById('supabase-key');
-    
-    if (urlElement && urlElement.getAttribute('content')) {
-        SUPABASE_URL = urlElement.getAttribute('content');
-    }
-    
-    if (keyElement && keyElement.getAttribute('content')) {
-        SUPABASE_ANON_KEY = keyElement.getAttribute('content');
-    }
-    
-    // Проверяем наличие значений по умолчанию или пустых значений
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || 
-        SUPABASE_URL === 'https://ваш-проект-url.supabase.co' || 
-        SUPABASE_ANON_KEY === 'ваш-публичный-ключ') {
-        console.error('Конфигурация Supabase не настроена. Установите значения в мета-тегах supabase-url и supabase-key.');
-        return false;
-    }
-    
-    try {
-        console.log('Инициализируем Supabase с URL:', SUPABASE_URL, 'и ключом:', SUPABASE_ANON_KEY.substring(0, 10) + '...');
-        supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-            auth: {
-                autoRefreshToken: true,
-                persistSession: true,
-                detectSessionInUrl: false
-            }
-        });
-        console.log('Supabase успешно инициализирован');
-        return true;
-    } catch (error) {
-        console.error('Ошибка при инициализации Supabase:', error);
-        return false;
-    }
+
+    storageConfigured = true;
+    console.log('Хранилище:', STORAGE_BASE_URL, 'API:', API_BASE_URL);
+    return true;
 }
 
-// Функция для получения списка моделей из Supabase
-async function fetchModelsFromSupabase() {
+function getAdminToken({ prompt: shouldPrompt = true } = {}) {
+    let token = localStorage.getItem('agrAdminToken') || '';
+    if (!token && shouldPrompt) {
+        token = window.prompt('Введите пароль администратора для загрузки/удаления моделей:') || '';
+        if (token) localStorage.setItem('agrAdminToken', token);
+    }
+    return token;
+}
+
+function clearAdminToken() {
+    localStorage.removeItem('agrAdminToken');
+}
+
+async function apiRequest(path, { method = 'GET', body, admin = false } = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (admin) {
+        const token = getAdminToken();
+        if (!token) throw new Error('Пароль администратора не указан');
+        headers['X-Admin-Token'] = token;
+    }
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 401) {
+        clearAdminToken();
+        throw new Error('Неверный пароль администратора');
+    }
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    return data;
+}
+
+// Загрузка списка моделей из Object Storage (прямое чтение models.json)
+async function fetchModels() {
     try {
-        if (!supabase) {
-            if (!initSupabase()) {
-                throw new Error('Не удалось инициализировать Supabase');
-            }
+        if (!storageConfigured && !initStorage()) {
+            loadModelsFromLocalStorage();
+            return;
         }
 
         document.querySelector('.loading').textContent = 'Загрузка списка моделей...';
         document.querySelector('.loading').style.display = 'block';
 
-        // Получаем список моделей из таблицы models
-        const { data, error } = await supabase
-            .from('models')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-        if (error) {
-            throw error;
+        const res = await fetch(`${STORAGE_BASE_URL}/models.json?t=${Date.now()}`, { cache: 'no-store' });
+        let data = [];
+        if (res.ok) {
+            data = await res.json();
+        } else if (res.status !== 404) {
+            throw new Error(`HTTP ${res.status} при чтении models.json`);
         }
 
-        console.log('Получены модели из Supabase:', data.length);
-
-        // Очищаем существующий список моделей
+        console.log('Получены модели:', data.length);
         clearModelSelector();
 
-        if (data.length === 0) {
+        if (!data.length) {
             document.querySelector('.loading').style.display = 'none';
+            userModels = [];
             return;
         }
 
-        // Преобразуем данные в формат userModels
-        const models = data.map(model => {
-            // Формируем полный URL для файла из Supabase Storage
-            const fileUrl = supabase.storage.from('models').getPublicUrl(model.file_path).data.publicUrl;
-            
-            return {
-                id: model.id,
-                url: fileUrl,
-                name: model.name || model.file_path.split('/').pop(),
-                uploadedAt: model.created_at,
-                size: model.size || 0,
-                format: model.format
-            };
-        });
-
-        // Добавляем модели в выпадающий список
-        models.forEach(model => {
-            addModelToSelector(model);
-        });
-
-        // Обновляем массив userModels
-        userModels = models;
-
-        // Сохраняем в localStorage как резервную копию
+        data.forEach(model => addModelToSelector(model));
+        userModels = data;
         localStorage.setItem('userModels', JSON.stringify(userModels));
-
         document.querySelector('.loading').style.display = 'none';
-        
-        // Загрузка модели по URL параметру теперь происходит только в DOMContentLoaded
-
     } catch (error) {
-        console.error('Ошибка при получении моделей из Supabase:', error);
+        console.error('Ошибка при получении моделей:', error);
         document.querySelector('.loading').textContent = 'Ошибка загрузки моделей';
         setTimeout(() => {
             document.querySelector('.loading').style.display = 'none';
         }, 2000);
-        
-        // Пробуем загрузить модели из localStorage как запасной вариант
         loadModelsFromLocalStorage();
     }
 }
 
-// Функция для загрузки файла модели в Supabase Storage
-async function uploadModelToSupabase(file) {
+// Загрузка файла модели в Object Storage через подписанный URL от Cloud Function
+async function uploadModel(file) {
     try {
-        if (!supabase) {
-            if (!initSupabase()) {
-                throw new Error('Не удалось инициализировать Supabase');
-            }
+        if (!storageConfigured && !initStorage()) {
+            throw new Error('Хранилище не настроено');
         }
 
-        document.querySelector('.loading').textContent = 'Проверка дубликатов моделей...';
-        document.querySelector('.loading').style.display = 'block';
-
-        // Проверяем наличие дубликата модели с таким же именем
-        let isDuplicate = false;
-        try {
-            isDuplicate = await checkModelDuplicate(file.name);
-        } catch (err) {
-            console.warn('Ошибка при проверке дубликатов:', err);
-            // Продолжаем выполнение даже при ошибке проверки дубликатов
-        }
-        
-        if (isDuplicate) {
-            throw new Error(`Модель с именем "${file.name}" уже существует в базе данных. Пожалуйста, переименуйте файл и попробуйте снова.`);
+        if (checkModelDuplicate(file.name)) {
+            throw new Error(`Модель с именем "${file.name}" уже существует. Переименуйте файл и попробуйте снова.`);
         }
 
-        document.querySelector('.loading').textContent = 'Загрузка модели на сервер...';
-        document.querySelector('.loading').style.display = 'block';
-
-        // Генерируем уникальное имя файла с использованием timestamp для уникальности
-        const timestamp = Date.now();
-        const safeFileName = file.name.replace(/[^\w\d.-]/g, '_'); // заменяем небезопасные символы
-        const fileName = `${timestamp}_${safeFileName}`;
-        const filePath = `public/${fileName}`;
-        
-        console.log('Загружаем файл в Supabase Storage:', filePath);
-
-        // Загружаем файл в хранилище
-        const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('models')
-            .upload(filePath, file, {
-                cacheControl: '3600',
-                contentType: file.type || 'application/octet-stream',
-                upsert: false
-            });
-
-        if (uploadError) {
-            console.error('Ошибка загрузки в Storage:', uploadError);
-            throw uploadError;
-        }
-
-        console.log('Загрузка в Storage успешна, получаем публичный URL');
-
-        // Получаем публичный URL файла
-        const { data: urlData } = supabase.storage
-            .from('models')
-            .getPublicUrl(filePath);
-
-        if (!urlData || !urlData.publicUrl) {
-            throw new Error('Не удалось получить публичный URL для загруженного файла');
-        }
-
-        console.log('Получен публичный URL:', urlData.publicUrl);
-
-        // Извлекаем расширение файла
         const format = file.name.split('.').pop().toLowerCase();
-
-        // Проверяем формат файла
         if (format !== 'glb' && format !== 'gltf') {
             throw new Error(`Неподдерживаемый формат файла: ${format}. Поддерживаются только GLB и GLTF.`);
         }
 
-        // Создаем объект с данными модели
-        const modelDataObj = {
-            name: file.name,
-            file_path: filePath,
-            format: format,
-            size: file.size
-        };
+        document.querySelector('.loading').textContent = 'Подготовка загрузки...';
+        document.querySelector('.loading').style.display = 'block';
 
+        const { uploadUrl, uploadHeaders, model } = await apiRequest('/upload', {
+            method: 'POST',
+            admin: true,
+            body: { name: file.name, size: file.size, format },
+        });
 
+        document.querySelector('.loading').textContent = 'Загрузка модели на сервер...';
 
-        console.log('Добавляем запись о модели в базу данных:', modelDataObj);
-
-        // Добавляем запись о модели в базу данных
-        const { data: modelData, error: modelError } = await supabase
-            .from('models')
-            .insert([modelDataObj])
-            .select();
-
-        if (modelError) {
-            console.error('Ошибка при добавлении записи в базу данных:', modelError);
-            
-            // Если не удалось добавить запись в базу, попытаемся удалить загруженный файл
-            try {
-                await supabase.storage.from('models').remove([filePath]);
-                console.log('Загруженный файл удален после ошибки');
-            } catch (removeError) {
-                console.warn('Не удалось удалить загруженный файл:', removeError);
-            }
-            
-            throw modelError;
+        const putRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: uploadHeaders || { 'Content-Type': file.type || 'application/octet-stream' },
+            body: file,
+        });
+        if (!putRes.ok) {
+            throw new Error(`Ошибка загрузки в хранилище: HTTP ${putRes.status}`);
         }
 
-        if (!modelData || modelData.length === 0) {
-            throw new Error('База данных не вернула информацию о созданной модели');
-        }
+        await apiRequest('/commit', { method: 'POST', admin: true, body: { model } });
 
-        console.log('Модель успешно загружена в базу данных:', modelData[0]);
+        userModels.unshift(model);
+        addModelToSelector(model, true);
 
-        // Создаем информацию о модели
-        const modelInfo = {
-            id: modelData[0].id,
-            url: urlData.publicUrl,
-            name: file.name,
-            uploadedAt: new Date().toISOString(),
-            size: file.size,
-            format: format
-        };
-
-        // Добавляем модель в список и загружаем
-        userModels.unshift(modelInfo);
-        addModelToSelector(modelInfo, true);
-        
-        // Выбираем новую модель в селекторе
         const modelSelect = document.getElementById('model-select');
         if (modelSelect) {
-            modelSelect.value = modelInfo.url;
+            modelSelect.value = model.url;
         }
+        currentModelPath = model.url;
 
-        // Загружаем новую модель
-        currentModelPath = modelInfo.url;
-        
-        // Сохраняем обновленный список в localStorage
         localStorage.setItem('userModels', JSON.stringify(userModels));
 
         document.querySelector('.loading').textContent = 'Модель успешно загружена!';
@@ -278,10 +174,9 @@ async function uploadModelToSupabase(file) {
             loadModel();
         }, 1000);
 
-        return modelInfo;
-
+        return model;
     } catch (error) {
-        console.error('Ошибка при загрузке модели в Supabase:', error);
+        console.error('Ошибка при загрузке модели:', error);
         document.querySelector('.loading').textContent = `Ошибка загрузки: ${error.message}`;
         setTimeout(() => {
             document.querySelector('.loading').style.display = 'none';
@@ -325,33 +220,29 @@ function handleFileSelect(event) {
         loadingIndicator.style.display = 'block';
     }
 
-    // Проверяем, доступен ли Supabase для загрузки на сервер
-    let supabaseConfigured = false;
+    // Проверяем, доступно ли облачное хранилище для загрузки на сервер
+    let cloudConfigured = false;
     try {
-        supabaseConfigured = initSupabase();
+        cloudConfigured = storageConfigured || initStorage();
     } catch (error) {
-        console.error('Ошибка при инициализации Supabase:', error);
-        supabaseConfigured = false;
+        console.error('Ошибка при инициализации хранилища:', error);
+        cloudConfigured = false;
     }
 
-    if (supabaseConfigured) {
-        console.log('Supabase инициализирован, пытаемся загрузить модель на сервер');
-        
-        // Загружаем модель через Supabase
-        uploadModelToSupabase(file)
+    if (cloudConfigured) {
+        console.log('Хранилище настроено, пытаемся загрузить модель на сервер');
+
+        uploadModel(file)
             .then(modelInfo => {
-                // Успешно загружено, модель уже добавлена в селектор
-                console.log('Модель успешно загружена через Supabase:', modelInfo);
+                console.log('Модель успешно загружена в хранилище:', modelInfo);
             })
             .catch(error => {
-                console.error('Ошибка загрузки через Supabase:', error);
-                // Пробуем загрузить локально как запасной вариант
+                console.error('Ошибка загрузки в хранилище:', error);
                 console.log('Переходим к локальной загрузке модели');
                 loadLocalModel(file);
             });
     } else {
-        // Если Supabase не настроен, загружаем модель локально
-        console.log('Supabase не настроен, загружаем модель локально');
+        console.log('Хранилище не настроено, загружаем модель локально');
         loadLocalModel(file);
     }
 }
@@ -1309,7 +1200,7 @@ function updateWASDControls() {
 let currentModelPath = '';
 
 const USE_HDR = true;
-// Список HDR карт (файлы лежат в Supabase Storage, бакет "environments")
+// Список HDR карт (лежат в Object Storage под префиксом environments/)
 const HDR_MAPS = [
     { name: 'Закат', path: 'sunset.hdr' },
     { name: 'День',  path: 'day.hdr' },
@@ -1319,10 +1210,10 @@ const HDR_MAPS = [
 let currentHdrIndex = 0;
 
 function getHdrUrl(path) {
-    if (!supabase && !initSupabase()) {
-        throw new Error('Supabase не инициализирован, невозможно получить URL HDR');
+    if (!storageConfigured && !initStorage()) {
+        throw new Error('Хранилище не настроено, невозможно получить URL HDR');
     }
-    return supabase.storage.from('environments').getPublicUrl(path).data.publicUrl;
+    return `${STORAGE_BASE_URL}/environments/${path}`;
 }
 
 // Инициализация 3D сцены перенесена в основной блок DOMContentLoaded
@@ -3783,15 +3674,12 @@ const handleButtonTouch = function(event) {
 
 // Обработчики кнопки помощи перенесены в основной блок инициализации
 
-// Функция для удаления модели из Supabase
-async function deleteModelFromSupabase(modelId, filePath) {
+// Удаление модели из Object Storage через Cloud Function
+async function deleteModel(modelId) {
     try {
-        if (!supabase) {
-            if (!initSupabase()) {
-                throw new Error('Не удалось инициализировать Supabase');
-            }
+        if (!storageConfigured && !initStorage()) {
+            throw new Error('Хранилище не настроено');
         }
-
         if (!modelId) {
             throw new Error('ID модели не указан');
         }
@@ -3799,33 +3687,11 @@ async function deleteModelFromSupabase(modelId, filePath) {
         document.querySelector('.loading').textContent = 'Удаление модели...';
         document.querySelector('.loading').style.display = 'block';
 
-        // Сначала удаляем запись из базы данных
-        const { error: dbError } = await supabase
-            .from('models')
-            .delete()
-            .eq('id', modelId);
+        await apiRequest('/delete', { method: 'POST', admin: true, body: { id: modelId } });
 
-        if (dbError) {
-            throw dbError;
-        }
-
-        // Затем удаляем файл из хранилища, если указан путь
-        if (filePath) {
-            const { error: storageError } = await supabase.storage
-                .from('models')
-                .remove([filePath]);
-
-            if (storageError) {
-                console.error('Ошибка удаления файла из хранилища:', storageError);
-                // Продолжаем выполнение, так как запись в БД уже удалена
-            }
-        }
-
-        // Удаляем модель из локального массива и localStorage
         userModels = userModels.filter(model => model.id !== modelId);
         localStorage.setItem('userModels', JSON.stringify(userModels));
 
-        // Удаляем модель из селектора
         const modelSelect = document.getElementById('model-select');
         if (modelSelect) {
             Array.from(modelSelect.options).forEach(option => {
@@ -3834,7 +3700,6 @@ async function deleteModelFromSupabase(modelId, filePath) {
                 }
             });
 
-            // Если есть другие модели, выбираем первую
             if (modelSelect.options.length > 0) {
                 modelSelect.selectedIndex = 0;
                 currentModelPath = modelSelect.value;
@@ -3848,9 +3713,8 @@ async function deleteModelFromSupabase(modelId, filePath) {
         }, 1500);
 
         return true;
-
     } catch (error) {
-        console.error('Ошибка при удалении модели из Supabase:', error);
+        console.error('Ошибка при удалении модели:', error);
         document.querySelector('.loading').textContent = `Ошибка удаления: ${error.message}`;
         setTimeout(() => {
             document.querySelector('.loading').style.display = 'none';
@@ -3858,6 +3722,7 @@ async function deleteModelFromSupabase(modelId, filePath) {
         return false;
     }
 }
+
 
 // Функция для показа/скрытия кнопки управления моделью
 function toggleModelManageButton(show) {
@@ -4196,10 +4061,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // Telegram функции авторизации и проверки подписки удалены
     
-    // Инициализируем Supabase и дожидаемся загрузки списка моделей,
+    // Инициализируем хранилище и дожидаемся загрузки списка моделей,
     // чтобы 3D-сцена инициализировалась уже с готовым списком
-    if (initSupabase()) {
-        await fetchModelsFromSupabase();
+    if (initStorage()) {
+        await fetchModels();
     } else {
         loadModelsFromLocalStorage();
     }
@@ -4374,32 +4239,10 @@ function updateHDRInterface() {
     });
 }
 
-// Функция для проверки наличия дубликата модели в базе данных
-async function checkModelDuplicate(fileName) {
-    try {
-        if (!supabase) {
-            if (!initSupabase()) {
-                throw new Error('Не удалось инициализировать Supabase');
-            }
-        }
-
-        // Проверяем наличие модели с таким же именем в базе данных
-        const { data, error } = await supabase
-            .from('models')
-            .select('id, name')
-            .eq('name', fileName);
-
-        if (error) {
-            console.error('Ошибка при проверке дубликатов модели:', error);
-            return false; // В случае ошибки разрешаем загрузку
-        }
-
-        // Если найдена модель с таким же именем, возвращаем true (дубликат существует)
-        return data && data.length > 0;
-    } catch (error) {
-        console.error('Ошибка при проверке дубликатов модели:', error);
-        return false; // В случае ошибки разрешаем загрузку
-    }
+// Проверяет, есть ли уже модель с таким же именем (по локальному списку userModels).
+// Бэкенд тоже проверяет и вернёт 409 при гонке — это лишь предварительная проверка.
+function checkModelDuplicate(fileName) {
+    return Array.isArray(userModels) && userModels.some(m => m && m.name === fileName);
 }
 
 
@@ -4526,33 +4369,28 @@ function handleFileSelectUpgraded(event) {
             loadingIndicator.style.display = 'block';
         }
 
-        // Проверяем, доступен ли Supabase для загрузки на сервер
-        let supabaseConfigured = false;
+        let cloudConfigured = false;
         try {
-            supabaseConfigured = initSupabase();
+            cloudConfigured = storageConfigured || initStorage();
         } catch (error) {
-            console.error('Ошибка при инициализации Supabase:', error);
-            supabaseConfigured = false;
+            console.error('Ошибка при инициализации хранилища:', error);
+            cloudConfigured = false;
         }
 
-        if (supabaseConfigured) {
-            console.log('Supabase инициализирован, пытаемся загрузить модель на сервер');
-            
-            // Загружаем модель через Supabase
-            uploadModelToSupabase(file)
+        if (cloudConfigured) {
+            console.log('Хранилище настроено, пытаемся загрузить модель на сервер');
+
+            uploadModel(file)
                 .then(modelInfo => {
-                    // Успешно загружено, модель уже добавлена в селектор
-                    console.log('Модель успешно загружена через Supabase:', modelInfo);
+                    console.log('Модель успешно загружена в хранилище:', modelInfo);
                 })
                 .catch(error => {
-                    console.error('Ошибка загрузки через Supabase:', error);
-                    // Пробуем загрузить локально как запасной вариант
+                    console.error('Ошибка загрузки в хранилище:', error);
                     console.log('Переходим к локальной загрузке модели');
                     loadLocalModel(file);
                 });
         } else {
-            // Если Supabase не настроен, загружаем модель локально
-            console.log('Supabase не настроен, загружаем модель локально');
+            console.log('Хранилище не настроено, загружаем модель локально');
             loadLocalModel(file);
         }
     } catch (error) {
@@ -4918,113 +4756,50 @@ async function loadModelFromUrlParam() {
     try {
         const modelParam = getModelParam();
         if (!modelParam) {
-            return false; // Тихо возвращаем false, если параметра нет
+            return false;
         }
-        
+
         console.log('Найден параметр модели в URL:', modelParam);
-        
-        // Инициализируем Supabase если нужно
-        if (!supabase) {
-            if (!initSupabase()) {
-                console.error('Не удалось инициализировать Supabase для загрузки модели');
-                return false;
-            }
-        }
-        
-        // Ищем модель в базе данных разными способами
-        console.log('Поиск модели в базе данных:', modelParam);
-        
-        // Создаем варианты поиска для разных случаев
-        const searchVariants = [
-            modelParam, // Исходный параметр: 0612_prdpervyivarshavskyi_vl_1_a_01fbxglb
-        ];
-        
-        // Добавляем варианты с точками перед расширениями
-        const extensions = ['glb', 'gltf', 'obj', 'fbx', 'dae', 'ply', 'stl'];
-        
-        // Простые случаи - одно расширение в конце
-        extensions.forEach(ext => {
-            const pattern = new RegExp(`([a-z\\d])${ext}$`, 'i');
-            if (pattern.test(modelParam)) {
-                searchVariants.push(modelParam.replace(pattern, `$1.${ext}`));
-            }
-        });
-        
-        // Сложные случаи - двойные расширения (fbxglb, objgltf и т.д.)
-        extensions.forEach(firstExt => {
-            extensions.forEach(secondExt => {
-                if (firstExt !== secondExt) {
-                    const doublePattern = new RegExp(`([a-z\\d])${firstExt}${secondExt}$`, 'i');
-                    if (doublePattern.test(modelParam)) {
-                        // Варианты: .fbx.glb, .fbxglb, fbx.glb
-                        searchVariants.push(modelParam.replace(doublePattern, `$1.${firstExt}.${secondExt}`));
-                        searchVariants.push(modelParam.replace(doublePattern, `$1.${firstExt}${secondExt}`));
-                        searchVariants.push(modelParam.replace(doublePattern, `$1${firstExt}.${secondExt}`));
-                    }
-                }
-            });
-        });
-        
-        // Удаляем дубликаты
-        const uniqueVariants = [...new Set(searchVariants)];
-        
-        // Строим условие поиска OR для всех вариантов
-        const searchConditions = uniqueVariants.map(variant => 
-            `name.ilike.%${variant}%,file_path.ilike.%${variant}%`
-        ).join(',');
-        
-        const { data, error } = await supabase
-            .from('models')
-            .select('*')
-            .or(searchConditions)
-            .limit(10);
-        
-        if (error) {
-            console.error('Ошибка при поиске модели в Supabase:', error);
+
+        if (!Array.isArray(userModels) || userModels.length === 0) {
+            console.log('Список моделей пуст, поиск невозможен');
             return false;
         }
-        
-        if (!data || data.length === 0) {
-            console.log(`Модель "${modelParam}" не найдена в базе данных`);
+
+        const needle = modelParam.toLowerCase();
+        const safeNeedle = createSafeModelParam(modelParam).toLowerCase();
+
+        // Поиск с приоритетом: точное совпадение по безопасному имени → по имени файла из ключа → подстрока
+        let bestMatch = null;
+        let bestScore = -1;
+        for (const model of userModels) {
+            if (!model || !model.name) continue;
+            const safeName = createSafeModelParam(model.name).toLowerCase();
+            const keyTail = (model.key || '').split('/').pop() || '';
+            const safeKeyTail = createSafeModelParam(keyTail).toLowerCase();
+
+            let score = -1;
+            if (safeName === safeNeedle) score = 3;
+            else if (safeKeyTail === safeNeedle) score = 2;
+            else if (model.name.toLowerCase().includes(needle) || keyTail.toLowerCase().includes(needle)) score = 1;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = model;
+                if (score === 3) break;
+            }
+        }
+
+        if (!bestMatch) {
+            console.log(`Модель "${modelParam}" не найдена`);
             return false;
         }
-        
-        // Выбираем лучшее совпадение
-        let bestMatch = data[0];
-        
-        // Ищем лучшее совпадение несколькими способами
-        for (const model of data) {
-            const safeModelName = createSafeModelParam(model.name);
-            const safeFilePath = createSafeModelParam(model.file_path.split('/').pop());
-            
-            // Точное совпадение по безопасному имени
-            if (safeModelName === modelParam) {
-                bestMatch = model;
-                break;
-            }
-            
-            // Точное совпадение по безопасному имени файла
-            if (safeFilePath === modelParam) {
-                bestMatch = model;
-                break;
-            }
-            
-            // Если имя файла содержит искомый параметр
-            if (model.file_path.toLowerCase().includes(modelParam.toLowerCase())) {
-                bestMatch = model;
-                // Не прерываем, может найдется более точное совпадение
-            }
-        }
-        
+
         console.log('Найдена модель:', bestMatch.name);
-        
-        // Получаем URL файла
-        const fileUrl = supabase.storage.from('models').getPublicUrl(bestMatch.file_path).data.publicUrl;
-        
-        // Обновляем селектор модели
+
+        const fileUrl = bestMatch.url;
         const modelSelect = document.getElementById('model-select');
         if (modelSelect) {
-            // Ищем соответствующую опцию в селекторе
             for (let i = 0; i < modelSelect.options.length; i++) {
                 const option = modelSelect.options[i];
                 if (option.value === fileUrl || option.textContent.includes(bestMatch.name)) {
@@ -5033,19 +4808,16 @@ async function loadModelFromUrlParam() {
                 }
             }
         }
-        
-        // Проверяем что scene инициализирован перед загрузкой модели
+
         if (!scene) {
             console.error('Scene не инициализирован, не можем загрузить модель');
             return false;
         }
-        
-        // Загружаем модель
+
         currentModelPath = fileUrl;
         await loadModel();
-        
+
         return true;
-        
     } catch (error) {
         console.error('Ошибка при загрузке модели по URL параметру:', error);
         return false;

@@ -1,0 +1,11 @@
+{
+  "name": "agr-yandex-backend",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "description": "Cloud Function: подписывает загрузки в Yandex Object Storage и ведёт models.json",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.654.0",
+    "@aws-sdk/s3-request-presigner": "^3.654.0"
+  }
+}
