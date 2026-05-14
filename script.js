@@ -60,7 +60,9 @@ async function apiRequest(path, { method = 'GET', body, admin = false } = {}) {
         if (!token) throw new Error('Пароль администратора не указан');
         headers['X-Admin-Token'] = token;
     }
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    const action = path.replace(/^\/+/, '');
+    const url = action ? `${API_BASE_URL}?action=${encodeURIComponent(action)}` : API_BASE_URL;
+    const res = await fetch(url, {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,

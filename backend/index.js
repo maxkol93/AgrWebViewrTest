@@ -181,16 +181,16 @@ async function handleList() {
 
 exports.handler = async (event) => {
   const method = (event.httpMethod || 'GET').toUpperCase();
-  const path = (event.path || event.url || '/').replace(/\/+$/, '') || '/';
+  const action = (event.queryStringParameters || {}).action || '';
 
-  if (method === 'OPTIONS') return reply(204, '');
+  if (method === 'OPTIONS') return reply(200, { ok: true });
 
   try {
-    if (method === 'GET' && (path === '/' || path === '/models')) return handleList();
-    if (method === 'POST' && path === '/upload') return handleUpload(event);
-    if (method === 'POST' && path === '/commit') return handleCommit(event);
-    if (method === 'POST' && path === '/delete') return handleDelete(event);
-    return reply(404, { error: `Не найдено: ${method} ${path}` });
+    if (method === 'GET' && (action === '' || action === 'list')) return handleList();
+    if (method === 'POST' && action === 'upload') return handleUpload(event);
+    if (method === 'POST' && action === 'commit') return handleCommit(event);
+    if (method === 'POST' && action === 'delete') return handleDelete(event);
+    return reply(404, { error: `Не найдено: ${method} ?action=${action}` });
   } catch (err) {
     console.error('Ошибка обработчика:', err);
     return reply(err.statusCode || 500, { error: err.message || 'internal error' });

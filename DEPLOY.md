@@ -83,10 +83,12 @@ zip -r ../function.zip index.js package.json node_modules
 
 ### Эндпоинты функции
 
-- `GET /` → список моделей (используется только как health-check; сайт читает `models.json` напрямую из бакета)
-- `POST /upload` (X-Admin-Token) — body `{ name, size, format }`, возвращает подписанный PUT URL
-- `POST /commit` (X-Admin-Token) — body `{ model }`, добавляет запись в `models.json`
-- `POST /delete` (X-Admin-Token) — body `{ id }`, удаляет запись и объект
+У Cloud Function один URL, маршрут передаётся в query-параметре `?action=…` (Яндекс не пропускает дополнительные сегменты пути в код функции — поэтому не `/upload`, а `?action=upload`).
+
+- `GET  …/<id>` → список моделей (используется только как health-check; сайт читает `models.json` напрямую из бакета)
+- `POST …/<id>?action=upload` (X-Admin-Token) — body `{ name, size, format }`, возвращает подписанный PUT URL
+- `POST …/<id>?action=commit` (X-Admin-Token) — body `{ model }`, добавляет запись в `models.json`
+- `POST …/<id>?action=delete` (X-Admin-Token) — body `{ id }`, удаляет запись и объект
 
 ## 4. Хостинг сайта
 
