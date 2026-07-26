@@ -1,0 +1,9 @@
+# Секреты деплоя — НЕ коммитить
+deploy/config.local.ps1
+sa-key.json
+
+# Зависимости и артефакты
+node_modules/
+backend/node_modules/
+deploy/node_modules/
+function.zip

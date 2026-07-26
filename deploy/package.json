@@ -1,0 +1,10 @@
+{
+  "name": "agr-deploy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Загрузчик сайта в Yandex Object Storage (используется deploy.ps1 и GitHub Actions)",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.654.0"
+  }
+}

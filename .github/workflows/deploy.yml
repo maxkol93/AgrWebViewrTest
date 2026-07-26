@@ -1,25 +1,62 @@
-name: Deploy to GitHub Pages
+name: Deploy (Yandex Cloud)
 
+# «Одна кнопка» = git push в main.  Можно также запустить вручную (workflow_dispatch).
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Inject secrets
-        run: |
-          sed -i "s|SUPABASE_URL_PLACEHOLDER|${{ secrets.SUPABASE_URL }}|g" index.html
-          sed -i "s|SUPABASE_KEY_PLACEHOLDER|${{ secrets.SUPABASE_KEY }}|g" index.html
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      - uses: actions/setup-node@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
+          node-version: "18"
+
+      # ── 1. Сайт → Object Storage ──────────────────────────────────────────
+      - name: Установить зависимости загрузчика
+        run: npm --prefix deploy install --no-audit --no-fund
+
+      - name: Залить сайт в бакет
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          STORAGE_BASE_URL: ${{ secrets.STORAGE_BASE_URL }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+        run: node deploy/deploy-frontend.mjs
+
+      # ── 2. Логика → Cloud Function ────────────────────────────────────────
+      - name: Установить Yandex CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -n -i "$HOME/yc"
+          echo "$HOME/yc/bin" >> "$GITHUB_PATH"
+
+      - name: Авторизовать yc
+        run: |
+          echo '${{ secrets.YC_SA_JSON_CREDENTIALS }}' > sa-key.json
+          yc config set service-account-key sa-key.json
+          yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
+
+      - name: Обновить Cloud Function
+        run: |
+          yc serverless function version create \
+            --function-name ${{ secrets.YC_FUNCTION_NAME }} \
+            --runtime nodejs18 \
+            --entrypoint index.handler \
+            --memory 256m \
+            --execution-timeout 30s \
+            --source-path ./backend \
+            --environment S3_BUCKET=${{ secrets.S3_BUCKET }} \
+            --environment S3_ENDPOINT=https://storage.yandexcloud.net \
+            --environment S3_REGION=ru-central1 \
+            --environment S3_ACCESS_KEY_ID=${{ secrets.S3_ACCESS_KEY_ID }} \
+            --environment S3_SECRET_ACCESS_KEY=${{ secrets.S3_SECRET_ACCESS_KEY }} \
+            --environment ADMIN_TOKEN=${{ secrets.ADMIN_TOKEN }}
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f sa-key.json

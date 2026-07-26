@@ -1,164 +1,129 @@
-# Развёртывание в Yandex Cloud
+# Деплой
 
-Стек: Yandex Object Storage (хранилище + хостинг сайта) + Yandex Cloud Function (бэкенд для подписи загрузок).
+Обновление приложения — **одной командой** или **одним push**. Обновляются сразу и
+сайт (`index.html`, `script.js`), и логика (Cloud Function в `backend/`).
 
-## 1. Бакет в Object Storage
+Стек: Yandex Object Storage (хранилище + хостинг сайта) + Yandex Cloud Function (бэкенд).
 
-Консоль → **Object Storage** → создать бакет, например `agr-viewer`.
+---
 
-- Класс хранилища: **Стандартное**
-- Доступ: **Публичный** для чтения объектов (нужно, чтобы браузер мог скачивать `.glb` и `models.json` напрямую)
-- Размер: «Без ограничений»
+## Как обновить приложение (каждый день)
 
-### CORS бакета
+### Вариант A — локально, одной командой
 
-Бакет → вкладка **CORS** → добавить правило:
+```powershell
+.\deploy.ps1
+```
+
+Скрипт сам зальёт сайт в бакет и обновит Cloud Function. Всё.
+
+### Вариант B — через git (автодеплой)
+
+```powershell
+git add -A
+git commit -m "обновление"
+git push
+```
+
+GitHub Actions подхватит push в `main` и сделает тот же деплой автоматически.
+Статус — вкладка **Actions** в репозитории.
+
+> Оба варианта делают одно и то же и полностью взаимозаменяемы.
+
+---
+
+## Разовая настройка
+
+Ниже — то, что делается **один раз**. После этого обновление всегда идёт командами выше.
+
+### 0. Что где хранится
+
+```
+бакет agr-viewer/
+├── index.html, script.js     ← сайт (заливает деплой)
+├── models.json, projects.json ← создаёт функция автоматически при первом изменении
+├── models/                   ← .glb, кладёт функция при загрузке
+└── environments/             ← HDR-карты (залить вручную один раз)
+```
+
+Структуру папок создавать вручную не нужно — она появляется сама при заливке.
+HDR-карты (`environments/*.hdr`) залейте один раз через консоль.
+
+### 1. Бакет Object Storage
+
+Консоль → **Object Storage** → создать бакет (напр. `agr-viewer`):
+- Доступ на чтение объектов — **публичный** (браузер качает `.glb` и `models.json` напрямую).
+- Вкладка **Веб-сайт** → включить хостинг: главная и страница ошибок — `index.html`.
+- Вкладка **CORS** → правило:
 
 ```json
-[
-  {
-    "AllowedOrigins": ["*"],
-    "AllowedMethods": ["GET", "PUT", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3000
-  }
-]
+[{ "AllowedOrigins": ["*"], "AllowedMethods": ["GET","PUT","HEAD"],
+   "AllowedHeaders": ["*"], "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3000 }]
 ```
 
-Если хотите ограничить — замените `"*"` в `AllowedOrigins` на свой домен.
+Сайт будет доступен по адресу `https://<бакет>.website.yandexcloud.net`.
 
-### Структура объектов в бакете
+### 2. Сервисный аккаунт и ключ
 
-```
-agr-viewer/
-├── index.html              ← сайт
-├── script.js               ← сайт
-├── models.json             ← список моделей (создаст функция при первой загрузке)
-├── projects.json           ← список проектов (создаст функция при первом изменении)
-├── models/
-│   └── 1715000000000_example.glb
-└── environments/
-    ├── sunset.hdr
-    ├── day.hdr
-    └── night.hdr
-```
+IAM → создать сервисный аккаунт (роль `storage.editor`) → **создать статический ключ**.
+Сохраните `accessKeyId` и `secretAccessKey` — понадобятся в конфиге деплоя и функции.
 
-Каждая запись в `models.json` имеет вид:
-```json
-{
-  "id": "uuid",
-  "name": "house.glb",              // оригинальное имя файла
-  "displayName": "Фасад финал",     // пользовательское имя модели
-  "projectId": "uuid|default",      // привязка к проекту
-  "key": "models/...",
-  "format": "glb",
-  "size": 12345678,
-  "uploadedAt": "...",
-  "url": "https://..."
-}
-```
+### 3. Cloud Function
 
-Записи в `projects.json`:
-```json
-{ "id": "uuid", "name": "Дом на Тверской", "createdAt": "..." }
-```
+Консоль → **Cloud Functions** → создать функцию (напр. `agr-viewer-api`),
+среда `nodejs18`, точка входа `index.handler`, сделать **публичной**.
+Код и переменные окружения зальёт деплой — руками ничего собирать/зиповать не нужно.
+Запомните URL функции вида `https://functions.yandexcloud.net/d4eXXXXX`.
 
-При первом запуске после миграции бэкенд автоматически проставляет старым моделям `displayName = name` и `projectId = "default"` (специальный проект «Без проекта»).
+### 4A. Настройка локального деплоя (`.\deploy.ps1`)
 
-HDR-карты залейте вручную через консоль один раз.
+1. Установите **Node.js 18+** и **Yandex CLI**:
+   ```powershell
+   iex (New-Object Net.WebClient).DownloadString('https://storage.yandexcloud.net/yandexcloud-yc/install.ps1')
+   ```
+   Перезапустите терминал, затем `yc init` (авторизация + выбор облака/каталога).
+2. Скопируйте конфиг и заполните его своими значениями:
+   ```powershell
+   Copy-Item deploy\config.example.ps1 deploy\config.local.ps1
+   notepad deploy\config.local.ps1
+   ```
+   `config.local.ps1` в `.gitignore` — секреты в git не попадут.
 
-## 2. Сервисный аккаунт и статический ключ
+Готово: теперь `.\deploy.ps1` работает.
 
-Консоль → **IAM** → создать сервисный аккаунт `agr-viewer-sa` с ролью `storage.editor` (только на нужном бакете, если используете ACL).
+### 4B. Настройка автодеплоя (GitHub Actions)
 
-В этом же сервисном аккаунте → **Создать статический ключ доступа**. Получите `accessKeyId` и `secretAccessKey` — они пойдут в переменные окружения функции.
+В репозитории → **Settings → Secrets and variables → Actions** добавьте секреты:
 
-## 3. Cloud Function
+| Секрет                    | Значение                                            |
+|---------------------------|-----------------------------------------------------|
+| `S3_BUCKET`               | имя бакета, напр. `agr-viewer`                      |
+| `S3_ACCESS_KEY_ID`        | из статического ключа сервисного аккаунта          |
+| `S3_SECRET_ACCESS_KEY`    | из статического ключа сервисного аккаунта          |
+| `STORAGE_BASE_URL`        | `https://storage.yandexcloud.net/agr-viewer`       |
+| `API_BASE_URL`            | URL Cloud Function                                  |
+| `ADMIN_TOKEN`             | длинная случайная строка (пароль на загрузку)      |
+| `YC_FUNCTION_NAME`        | имя функции, напр. `agr-viewer-api`                |
+| `YC_FOLDER_ID`            | ID каталога в Yandex Cloud                          |
+| `YC_SA_JSON_CREDENTIALS`  | JSON авторизованного ключа сервисного аккаунта¹    |
 
-В `backend/` лежит код функции. Соберите пакет:
+¹ Создать: `yc iam key create --service-account-name <sa> --output key.json`,
+затем вставить содержимое `key.json` в секрет. Сервисному аккаунту нужны роли
+`storage.editor` и `functions.editor` (или `editor`).
 
-```bash
-cd backend
-npm install
-zip -r ../function.zip index.js package.json node_modules
-```
+Готово: теперь `git push` в `main` деплоит автоматически.
 
-Консоль → **Cloud Functions** → создать функцию `agr-viewer-api`:
+---
 
-- Среда выполнения: **nodejs18** (или новее)
-- Точка входа: `index.handler`
-- Таймаут: 30 с, память: 256 МБ
-- Загрузить `function.zip`
+## Как это работает и сколько стоит
 
-Переменные окружения:
+- Смотреть модели может любой без пароля. При загрузке/удалении сайт спросит `ADMIN_TOKEN`
+  (сохранит в `localStorage` под ключом `agrAdminToken`; сброс — `localStorage.removeItem('agrAdminToken')`).
+- Появляется кнопка ⚙ — управление моделями и проектами.
+- Стоимость под небольшую нагрузку: **≈ 20–60 ₽/мес** (хранилище + трафик; функция в бесплатном тире).
 
-| Имя                  | Значение                                     |
-|----------------------|----------------------------------------------|
-| `S3_BUCKET`          | `agr-viewer`                                 |
-| `S3_ENDPOINT`        | `https://storage.yandexcloud.net` (по умолч.)|
-| `S3_REGION`          | `ru-central1`                                |
-| `S3_ACCESS_KEY_ID`   | из статического ключа сервисного аккаунта    |
-| `S3_SECRET_ACCESS_KEY` | из статического ключа сервисного аккаунта  |
-| `ADMIN_TOKEN`        | любая длинная случайная строка               |
+### Эндпоинты функции (один URL, маршрут в `?action=`)
 
-Сделайте функцию **публичной** (вкладка «Тестирование» → «Сделать функцию публичной»). Запомните URL вида `https://functions.yandexcloud.net/d4eXXXXXXXXXXXXXXXXX`.
-
-### Эндпоинты функции
-
-У Cloud Function один URL, маршрут передаётся в query-параметре `?action=…` (Яндекс не пропускает дополнительные сегменты пути в код функции — поэтому не `/upload`, а `?action=upload`).
-
-Модели:
-- `GET  …/<id>` → список моделей (используется только как health-check; сайт читает `models.json` напрямую из бакета)
-- `POST …/<id>?action=upload` (X-Admin-Token) — body `{ name, size, format, displayName, projectId? | newProjectName? }`, возвращает подписанный PUT URL и подготовленную запись модели
-- `POST …/<id>?action=commit` (X-Admin-Token) — body `{ model }`, добавляет запись в `models.json`
-- `POST …/<id>?action=delete` (X-Admin-Token) — body `{ id }`, удаляет запись и объект
-- `POST …/<id>?action=update` (X-Admin-Token) — body `{ id, displayName?, projectId? }`, переименовывает модель и/или переносит в другой проект
-
-Проекты:
-- `GET  …/<id>?action=projects` → список проектов
-- `POST …/<id>?action=project-create` (X-Admin-Token) — body `{ name }`
-- `POST …/<id>?action=project-rename` (X-Admin-Token) — body `{ id, name }`
-- `POST …/<id>?action=project-delete` (X-Admin-Token) — body `{ id }` (запрещено, если в проекте остались модели)
-
-## 4. Хостинг сайта
-
-В консоли бакета → **Веб-сайт** → включить статический хостинг:
-
-- Главная страница: `index.html`
-- Страница ошибок: `index.html`
-
-Залейте `index.html` и `script.js` в корень бакета:
-
-```bash
-# через s3cmd / aws-cli / консоль
-aws --endpoint-url=https://storage.yandexcloud.net s3 cp index.html s3://agr-viewer/
-aws --endpoint-url=https://storage.yandexcloud.net s3 cp script.js  s3://agr-viewer/
-```
-
-Сайт будет доступен по адресу `https://agr-viewer.website.yandexcloud.net`.
-
-## 5. Конфигурация фронтенда
-
-Перед заливкой `index.html` подставьте в него ваши значения:
-
-```html
-<meta id="storage-base-url" name="storage-base-url"
-      content="https://storage.yandexcloud.net/agr-viewer">
-<meta id="api-base-url" name="api-base-url"
-      content="https://functions.yandexcloud.net/d4eXXXXXXXXXXXXXXXXX">
-```
-
-Любой пользователь сможет смотреть модели без пароля. При попытке заливки/удаления сайт спросит `ADMIN_TOKEN` (через `prompt`) и запомнит его в `localStorage` под ключом `agrAdminToken`. После этого появится кнопка ⚙ в левом верхнем углу — модалка с управлением моделями (переименование, смена проекта, удаление) и проектами (создание, переименование, удаление). Чтобы сбросить — в консоли браузера выполнить `localStorage.removeItem('agrAdminToken')`.
-
-### Пользовательский флоу загрузки
-
-При выборе файла открывается диалог: ввод **названия модели** (по умолчанию — имя файла без расширения) и выбор **проекта** — либо существующего из списка, либо создание нового по имени. Модель не может быть без проекта; если в системе пока ни одного проекта кроме «Без проекта», диалог сразу предложит ввести имя нового проекта.
-
-## Стоимость (порядок)
-
-- Хранение 10 ГБ: ~10 ₽/мес
-- Трафик 50 ГБ исходящий: ~48 ₽/мес (первые 10 ГБ бесплатно)
-- Функция: бесплатный тир 1M запросов/мес, для админ-операций даже близко не выберется
-
-Итого: **≈ 20–60 ₽/мес** под небольшую нагрузку.
+- `GET  ?action=list` / `?action=projects` — списки (сайт читает `models.json` напрямую из бакета)
+- `POST ?action=upload|commit|delete|update` (заголовок `X-Admin-Token`) — операции с моделями
+- `POST ?action=project-create|project-rename|project-delete` — операции с проектами
