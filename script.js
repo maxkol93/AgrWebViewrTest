@@ -1858,21 +1858,48 @@ function animateFirstView() {
 }
 
 // Добавляем перехватчик для FBXLoader перед функцией loadModel
+// Освобождает GPU-ресурсы (геометрии и текстуры) объекта, который не попал на сцену.
+function disposeObject3D(root) {
+    if (!root || typeof root.traverse !== 'function') return;
+    root.traverse((obj) => {
+        if (!obj.isMesh) return;
+        if (obj.geometry) obj.geometry.dispose();
+        const materials = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
+        materials.forEach((mat) => {
+            if (!mat) return;
+            if (mat.map) mat.map.dispose();
+            if (mat.normalMap) mat.normalMap.dispose();
+            if (mat.metalnessMap) mat.metalnessMap.dispose();
+            if (mat.roughnessMap) mat.roughnessMap.dispose();
+            mat.dispose();
+        });
+    });
+}
+
+// Токен поколения загрузки: защищает от гонки при параллельных вызовах loadModel().
+// Каждый вызов захватывает свой токен; если стартовала более новая загрузка,
+// устаревшая игнорирует свой прогресс и не трогает сцену.
+let currentLoadToken = 0;
+
 async function loadModel() {
     // Проверяем что scene инициализирован
     if (!scene) {
         console.error('Scene не инициализирован. Загрузка модели отменена.');
         return null;
     }
-    
+
+    // Захватываем идентичность этой загрузки: свой токен и путь на момент старта.
+    const loadToken = ++currentLoadToken;
+    const pathToLoad = currentModelPath;
+
     // Определяем формат файла более безопасным способом
     let fileFormat = '';
-    
+
     try {
         // Получаем формат из расширения URL более надежным способом
-        if (currentModelPath && typeof currentModelPath === 'string') {
+        if (pathToLoad && typeof pathToLoad === 'string') {
             // Удаляем все параметры URL и hash
-            const cleanPath = currentModelPath.split('?')[0].split('#')[0];
+            const cleanPath = pathToLoad.split('?')[0].split('#')[0];
             // Получаем последнюю часть пути (имя файла)
             const fileName = cleanPath.split('/').pop();
             
@@ -1895,9 +1922,9 @@ async function loadModel() {
             }
         }
         
-        const isLocalFile = currentModelPath.startsWith('blob:');
-        
-        document.querySelector('.loading').textContent = isLocalFile 
+        const isLocalFile = pathToLoad.startsWith('blob:');
+
+        document.querySelector('.loading').textContent = isLocalFile
             ? 'Загрузка пользовательской модели...' 
             : 'Загрузка модели...';
         document.querySelector('.loading').style.display = 'block';
@@ -1916,7 +1943,10 @@ async function loadModel() {
         dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
         loader.setDRACOLoader(dracoLoader);
         
-        const gltf = await loader.loadAsync(currentModelPath, function(xhr) {
+        const gltf = await loader.loadAsync(pathToLoad, function(xhr) {
+            // Игнорируем прогресс устаревшей загрузки, чтобы проценты не «скакали»
+            // между двумя параллельными скачиваниями.
+            if (loadToken !== currentLoadToken) return;
             if (isLocalFile) {
                 const loaded = xhr.loaded / (1024 * 1024);
                 document.querySelector('.loading').textContent = `Загрузка: ${loaded.toFixed(2)} МБ`;
@@ -1925,9 +1955,17 @@ async function loadModel() {
                 document.querySelector('.loading').textContent = `Загрузка GLTF/GLB: ${percent}%`;
             }
         });
-        
+
+        // Если пока мы скачивали, стартовала более новая загрузка — эта устарела.
+        // Освобождаем ресурсы скачанной модели и выходим, не трогая сцену.
+        if (loadToken !== currentLoadToken) {
+            console.log('Загрузка устарела, результат отброшен:', pathToLoad);
+            disposeObject3D(gltf.scene);
+            return null;
+        }
+
         loadedModel = gltf.scene;
-        
+
         // Если в сцене уже есть модель, удаляем ее и очищаем ресурсы
         if (model && scene) {
             scene.remove(model);
@@ -2120,7 +2158,7 @@ async function loadModel() {
         
         // Если это локальный файл, обновляем выпадающий список и добавляем пользовательскую опцию
         if (isLocalFile) {
-            const fileName = currentModelPath.split('/').pop().split('#')[0];
+            const fileName = pathToLoad.split('/').pop().split('#')[0];
             
             // Проверка наличия пользовательской опции в селекте
             let customOption = Array.from(modelSelect.options).find(option => option.value === 'custom');
