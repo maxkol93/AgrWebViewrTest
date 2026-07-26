@@ -572,6 +572,194 @@
             border: 1px solid white !important; /* Уменьшаем с 2px до 1px */
         }
 
+        /* ── Модальные окна (загрузка модели / админ-панель) ────────── */
+        .agr-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0,0,0,0.65);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 3000;
+            font-family: 'Unbounded', sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .agr-modal-overlay.visible { display: flex; }
+        .agr-modal {
+            background-color: #1f2228;
+            color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+            width: min(560px, calc(100vw - 32px));
+            max-height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .agr-modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .agr-modal-close {
+            background: transparent;
+            color: #fff;
+            border: none;
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .agr-modal-close:hover { background-color: rgba(255,255,255,0.08); }
+        .agr-modal-body {
+            padding: 16px 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .agr-modal-footer {
+            padding: 12px 20px 16px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .agr-field { display: flex; flex-direction: column; gap: 6px; }
+        .agr-field label { font-size: 13px; color: #bbb; font-weight: 500; }
+        .agr-field input[type="text"],
+        .agr-field select {
+            font-family: 'Unbounded', sans-serif;
+            background-color: #2a2e36;
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-size: 14px;
+            outline: none;
+        }
+        .agr-field input[type="text"]:focus,
+        .agr-field select:focus { border-color: #4285f4; }
+        .agr-btn {
+            font-family: 'Unbounded', sans-serif;
+            font-weight: 500;
+            background-color: #4285f4;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 18px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+        .agr-btn:hover { background-color: #5294ff; }
+        .agr-btn:active { transform: scale(0.97); }
+        .agr-btn.secondary {
+            background-color: transparent;
+            color: #ccc;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .agr-btn.secondary:hover { background-color: rgba(255,255,255,0.06); color: #fff; }
+        .agr-btn.danger { background-color: #e74c3c; }
+        .agr-btn.danger:hover { background-color: #ff6553; }
+        .agr-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .agr-error {
+            color: #ff8a80;
+            font-size: 13px;
+            min-height: 16px;
+        }
+        #upload-file-info {
+            font-size: 13px;
+            color: #aaa;
+            background-color: rgba(255,255,255,0.04);
+            padding: 8px 10px;
+            border-radius: 6px;
+        }
+        .agr-radio-row { display: flex; gap: 16px; flex-wrap: wrap; }
+        .agr-radio-row label {
+            display: flex; gap: 6px; align-items: center;
+            font-size: 13px; color: #ddd; cursor: pointer;
+        }
+        /* Админ-панель: списки */
+        #admin-projects, #admin-models {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 220px;
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 6px;
+            padding: 6px;
+        }
+        .admin-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .admin-row:nth-child(even) { background-color: rgba(255,255,255,0.03); }
+        .admin-row .row-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .admin-row .row-actions { display: flex; gap: 4px; }
+        .admin-row button {
+            background-color: rgba(255,255,255,0.06);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: 'Unbounded', sans-serif;
+        }
+        .admin-row button:hover { background-color: rgba(255,255,255,0.14); }
+        .admin-row button.danger { background-color: rgba(231,76,60,0.25); }
+        .admin-row button.danger:hover { background-color: rgba(231,76,60,0.55); }
+        .admin-tabs { display: flex; gap: 6px; }
+        .admin-tab {
+            background-color: transparent;
+            color: #aaa;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px 6px 0 0;
+            padding: 8px 14px;
+            cursor: pointer;
+            font-family: 'Unbounded', sans-serif;
+            font-size: 13px;
+        }
+        .admin-tab.active { background-color: #2a2e36; color: #fff; border-color: #4285f4; }
+        #admin-settings-btn {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 36px;
+            height: 36px;
+            background-color: rgba(0,0,0,0.75);
+            color: white;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            z-index: 1100;
+            transition: transform 0.2s, background-color 0.2s;
+        }
+        #admin-settings-btn.visible { display: flex; }
+        #admin-settings-btn:hover { background-color: #4285f4; }
+        #admin-settings-btn:active { transform: scale(0.95); }
+        @media (max-width: 768px) {
+            #admin-settings-btn { display: none !important; }
+        }
+
         /* ВСЕГДА скрываем кнопку пропуска HDR */
         #skipHDR {
             display: none !important;
@@ -911,6 +1099,9 @@
             </svg>
         </button>
         
+        <!-- Кнопка администратора (видна, если admin-токен в localStorage) -->
+        <button id="admin-settings-btn" title="Управление моделями и проектами" aria-label="Админ-панель">⚙</button>
+
         <div id="help-icon">?</div>
         <div id="help-panel">
             <h3>Управление</h3>
@@ -1002,6 +1193,76 @@
                     <span>Полный экран:</span>
                     <span>F ESC</span>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка: параметры загружаемой модели -->
+    <div id="upload-modal" class="agr-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title">
+        <div class="agr-modal">
+            <div class="agr-modal-header">
+                <span id="upload-modal-title">Загрузка модели</span>
+                <button type="button" class="agr-modal-close" data-modal-close="upload-modal" aria-label="Закрыть">×</button>
+            </div>
+            <div class="agr-modal-body">
+                <div id="upload-file-info">Файл не выбран</div>
+                <div class="agr-field">
+                    <label for="upload-display-name">Название модели</label>
+                    <input type="text" id="upload-display-name" maxlength="200" autocomplete="off" placeholder="Например: Фасад финал">
+                </div>
+                <div class="agr-field">
+                    <label>Проект</label>
+                    <div class="agr-radio-row">
+                        <label><input type="radio" name="upload-project-mode" value="existing" checked> Существующий</label>
+                        <label><input type="radio" name="upload-project-mode" value="new"> Новый</label>
+                    </div>
+                </div>
+                <div class="agr-field" id="upload-project-existing-wrap">
+                    <label for="upload-project-select">Выберите проект</label>
+                    <select id="upload-project-select"></select>
+                </div>
+                <div class="agr-field" id="upload-project-new-wrap" style="display:none">
+                    <label for="upload-new-project-name">Название нового проекта</label>
+                    <input type="text" id="upload-new-project-name" maxlength="120" autocomplete="off" placeholder="Например: Дом на Тверской">
+                </div>
+                <div class="agr-error" id="upload-error"></div>
+            </div>
+            <div class="agr-modal-footer">
+                <button type="button" class="agr-btn secondary" data-modal-close="upload-modal">Отмена</button>
+                <button type="button" class="agr-btn" id="upload-confirm-btn">Загрузить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Админ-панель: проекты и модели -->
+    <div id="admin-modal" class="agr-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+        <div class="agr-modal">
+            <div class="agr-modal-header">
+                <span id="admin-modal-title">Управление</span>
+                <button type="button" class="agr-modal-close" data-modal-close="admin-modal" aria-label="Закрыть">×</button>
+            </div>
+            <div class="agr-modal-body">
+                <div class="admin-tabs">
+                    <button type="button" class="admin-tab active" data-admin-tab="models">Модели</button>
+                    <button type="button" class="admin-tab" data-admin-tab="projects">Проекты</button>
+                </div>
+                <div id="admin-tab-models">
+                    <div id="admin-models"></div>
+                </div>
+                <div id="admin-tab-projects" style="display:none">
+                    <div class="agr-field">
+                        <label for="admin-new-project-name">Новый проект</label>
+                        <div style="display:flex; gap:8px;">
+                            <input type="text" id="admin-new-project-name" maxlength="120" placeholder="Название проекта" style="flex:1; background-color:#2a2e36; color:#fff; border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:10px 12px; font-family:'Unbounded',sans-serif; font-size:14px; outline:none;">
+                            <button type="button" class="agr-btn" id="admin-create-project-btn">Создать</button>
+                        </div>
+                    </div>
+                    <div id="admin-projects"></div>
+                </div>
+                <div class="agr-error" id="admin-error"></div>
+            </div>
+            <div class="agr-modal-footer">
+                <button type="button" class="agr-btn secondary" data-modal-close="admin-modal">Закрыть</button>
             </div>
         </div>
     </div>
