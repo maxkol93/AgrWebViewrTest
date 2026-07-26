@@ -10,11 +10,31 @@
 // Запуск:  node deploy/deploy-frontend.mjs
 
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// Версия: старшая часть — из файла VERSION (правится вручную),
+// патч — число коммитов с момента последнего изменения VERSION
+// (после каждого пуша +1, при ручном поднятии VERSION сбрасывается в 0).
+function appVersion() {
+  let base = '0.0';
+  try { base = readFileSync(path.join(root, 'VERSION'), 'utf8').trim() || '0.0'; } catch {}
+  const git = (cmd) => execSync(cmd, { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  let patch = 0;
+  try {
+    const lastVerCommit = git('git log -1 --format=%H -- VERSION');
+    patch = lastVerCommit
+      ? Number(git(`git rev-list --count ${lastVerCommit}..HEAD`))
+      : Number(git('git rev-list --count HEAD'));
+    if (!Number.isFinite(patch)) patch = 0;
+  } catch {}
+  return `v${base}.${patch}`;
+}
 
 const {
   S3_BUCKET,
@@ -62,10 +82,14 @@ async function put(key, body, contentType) {
 async function main() {
   console.log(`→ Заливаю сайт в бакет "${S3_BUCKET}"…`);
 
+  const version = appVersion();
+  console.log(`  версия: ${version}`);
+
   let html = await readFile(path.join(root, 'index.html'), 'utf8');
   html = html
     .replaceAll('STORAGE_BASE_URL_PLACEHOLDER', STORAGE_BASE_URL)
-    .replaceAll('API_BASE_URL_PLACEHOLDER', API_BASE_URL);
+    .replaceAll('API_BASE_URL_PLACEHOLDER', API_BASE_URL)
+    .replaceAll('VERSION_PLACEHOLDER', version);
 
   if (html.includes('_PLACEHOLDER')) {
     console.error('✗ В index.html остались неподставленные плейсхолдеры — прерываю.');
