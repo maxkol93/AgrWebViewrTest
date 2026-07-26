@@ -1,0 +1,42 @@
+name: Import catalog (projects/subprojects)
+
+# Импорт каталога из docs/projects_codes.json в бакет (projects.json + subprojects.json).
+# Запускается вручную. reset=true — пересобрать каталог с нуля (первый прогон миграции).
+on:
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: "Пересобрать каталог с нуля (--reset, для первого прогона)"
+        type: boolean
+        default: false
+      dry:
+        description: "Только показать изменения, не записывать (--dry)"
+        type: boolean
+        default: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Установить зависимости
+        run: npm --prefix deploy install --no-audit --no-fund
+
+      - name: Импорт каталога
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT: https://storage.yandexcloud.net
+          S3_REGION: ru-central1
+        run: |
+          FLAGS=""
+          if [ "${{ inputs.reset }}" = "true" ]; then FLAGS="$FLAGS --reset"; fi
+          if [ "${{ inputs.dry }}" = "true" ]; then FLAGS="$FLAGS --dry"; fi
+          echo "Запуск: node deploy/import-catalog.mjs$FLAGS"
+          node deploy/import-catalog.mjs $FLAGS
