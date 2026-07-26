@@ -11,10 +11,18 @@ const REGION = process.env.S3_REGION || 'ru-central1';
 const ENDPOINT = process.env.S3_ENDPOINT || 'https://storage.yandexcloud.net';
 const BUCKET = process.env.S3_BUCKET;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+
 const MODELS_KEY = 'models.json';
 const PROJECTS_KEY = 'projects.json';
-const DEFAULT_PROJECT_ID = 'default';
-const DEFAULT_PROJECT_NAME = 'Без проекта';
+const SUBPROJECTS_KEY = 'subprojects.json';
+
+// Проект/подпроект по умолчанию, куда попадают все «ничейные» модели.
+const UNKNOWN_PROJECT_ID = 'unknown';
+const UNKNOWN_PROJECT_NAME = 'Unknown';
+const UNKNOWN_COMMON_ID = 'unknown-common';
+const UNKNOWN_COMMON_CODE = 'unknown-common';
+const COMMON_NAME = 'Common';
+
 const UPLOAD_URL_TTL = 3600;
 
 const s3 = new S3Client({
@@ -96,48 +104,13 @@ async function writeJsonKey(key, data) {
 
 const writeModelsJson = (arr) => writeJsonKey(MODELS_KEY, arr);
 const writeProjectsJson = (arr) => writeJsonKey(PROJECTS_KEY, arr);
+const writeSubprojectsJson = (arr) => writeJsonKey(SUBPROJECTS_KEY, arr);
 
-function defaultProject() {
-  return {
-    id: DEFAULT_PROJECT_ID,
-    name: DEFAULT_PROJECT_NAME,
-    createdAt: new Date(0).toISOString(),
-  };
-}
+// ─── Утилиты ──────────────────────────────────────────────────────────────
 
-// Читает projects.json. Гарантирует наличие проекта по умолчанию.
-// Если файла нет — возвращает [defaultProject] без записи (запишем при первом изменении).
-async function readProjectsJson() {
-  const arr = await readJsonKey(PROJECTS_KEY, null);
-  if (!Array.isArray(arr) || arr.length === 0) {
-    return [defaultProject()];
-  }
-  if (!arr.some((p) => p && p.id === DEFAULT_PROJECT_ID)) {
-    arr.unshift(defaultProject());
-  }
-  return arr;
-}
-
-// Читает models.json и нормализует записи (displayName, projectId).
-// Возвращает { models, changed }: changed=true если что-то пришлось добить дефолтами.
-async function readModelsJson() {
-  const raw = await readJsonKey(MODELS_KEY, []);
-  if (!Array.isArray(raw)) return { models: [], changed: false };
-  let changed = false;
-  const models = raw.map((m) => {
-    if (!m || typeof m !== 'object') return m;
-    const patched = { ...m };
-    if (!patched.displayName) {
-      patched.displayName = patched.name || 'Без имени';
-      changed = true;
-    }
-    if (!patched.projectId) {
-      patched.projectId = DEFAULT_PROJECT_ID;
-      changed = true;
-    }
-    return patched;
-  });
-  return { models, changed };
+function trimStr(v, max = 200) {
+  if (typeof v !== 'string') return '';
+  return v.trim().slice(0, max);
 }
 
 function safeFileName(name) {
@@ -149,26 +122,125 @@ function publicUrl(key) {
   return `${ENDPOINT}/${BUCKET}/${enc}`;
 }
 
-function trimStr(v, max = 200) {
-  if (typeof v !== 'string') return '';
-  return v.trim().slice(0, max);
+const TRANSLIT = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i',
+  й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't',
+  у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '',
+  э: 'e', ю: 'yu', я: 'ya',
+};
+
+function slugify(name) {
+  const src = String(name || '').toLowerCase();
+  let out = '';
+  for (const ch of src) {
+    if (TRANSLIT[ch] !== undefined) out += TRANSLIT[ch];
+    else if (/[a-z0-9]/.test(ch)) out += ch;
+    else out += '-';
+  }
+  return out.replace(/-+/g, '-').replace(/^-|-$/g, '') || 'x';
 }
 
-// Гарантирует, что в projects.json есть запись с указанным id.
-// Возвращает обновлённый список и флаг изменения.
-function ensureProjectExists(projects, projectId) {
-  if (projects.some((p) => p.id === projectId)) return { projects, changed: false };
-  if (projectId === DEFAULT_PROJECT_ID) {
-    return { projects: [defaultProject(), ...projects], changed: true };
+// Дата в формате YYYY-MM-DD (без времени).
+function normalizeDate(v, fallbackIso) {
+  if (typeof v === 'string') {
+    const m = v.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
   }
-  return { projects, changed: false };
+  const d = fallbackIso ? new Date(fallbackIso) : new Date();
+  if (isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+  return d.toISOString().slice(0, 10);
 }
 
 // ─── Проекты ────────────────────────────────────────────────────────────────
 
+function unknownProject() {
+  return { id: UNKNOWN_PROJECT_ID, name: UNKNOWN_PROJECT_NAME, createdAt: new Date(0).toISOString() };
+}
+
+function unknownCommonSubproject() {
+  return {
+    id: UNKNOWN_COMMON_ID,
+    code: UNKNOWN_COMMON_CODE,
+    projectId: UNKNOWN_PROJECT_ID,
+    name: COMMON_NAME,
+    isCommon: true,
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
+// Читает projects.json, гарантирует наличие проекта Unknown.
+async function readProjectsJson() {
+  const arr = await readJsonKey(PROJECTS_KEY, null);
+  const list = Array.isArray(arr) ? arr.slice() : [];
+  if (!list.some((p) => p && p.id === UNKNOWN_PROJECT_ID)) {
+    list.unshift(unknownProject());
+  }
+  return list;
+}
+
+// Читает subprojects.json, гарантирует наличие Unknown/Common.
+async function readSubprojectsJson() {
+  const arr = await readJsonKey(SUBPROJECTS_KEY, null);
+  const list = Array.isArray(arr) ? arr.slice() : [];
+  if (!list.some((s) => s && s.id === UNKNOWN_COMMON_ID)) {
+    list.unshift(unknownCommonSubproject());
+  }
+  return list;
+}
+
+// Читает models.json и нормализует записи под новую схему.
+// Возвращает { models, changed }: changed=true если что-то добили дефолтами/мигрировали.
+async function readModelsJson() {
+  const raw = await readJsonKey(MODELS_KEY, []);
+  if (!Array.isArray(raw)) return { models: [], changed: false };
+  let changed = false;
+  const models = raw.map((m) => {
+    if (!m || typeof m !== 'object') return m;
+    const patched = { ...m };
+    if (!patched.displayName) { patched.displayName = patched.name || 'Без имени'; changed = true; }
+    // Миграция: старое поле projectId больше не используется — все «ничейные» в Unknown/Common.
+    if (!patched.subprojectId) { patched.subprojectId = UNKNOWN_COMMON_ID; changed = true; }
+    if (patched.projectId !== undefined) { delete patched.projectId; changed = true; }
+    if (!patched.modelDate) { patched.modelDate = normalizeDate(null, patched.uploadedAt); changed = true; }
+    if (patched.versionName === undefined) { patched.versionName = ''; changed = true; }
+    if (patched.comment === undefined) { patched.comment = ''; changed = true; }
+    return patched;
+  });
+  return { models, changed };
+}
+
+// Генерирует уникальный код для Common-подпроекта проекта (латиница).
+function makeCommonCode(projectName, existingCodes) {
+  const base = `${slugify(projectName)}-common`;
+  let code = base;
+  let i = 2;
+  while (existingCodes.has(code)) { code = `${base}-${i}`; i += 1; }
+  return code;
+}
+
+// Гарантирует наличие Common-подпроекта у проекта. Мутирует subprojects, возвращает его.
+function ensureCommonSubproject(subprojects, project) {
+  let common = subprojects.find((s) => s.projectId === project.id && s.isCommon);
+  if (common) return common;
+  const codes = new Set(subprojects.map((s) => s.code));
+  common = {
+    id: crypto.randomUUID(),
+    code: project.id === UNKNOWN_PROJECT_ID ? UNKNOWN_COMMON_CODE : makeCommonCode(project.name, codes),
+    projectId: project.id,
+    name: COMMON_NAME,
+    isCommon: true,
+    createdAt: new Date().toISOString(),
+  };
+  subprojects.push(common);
+  return common;
+}
+
 async function handleProjectsList() {
-  const projects = await readProjectsJson();
-  return reply(200, projects);
+  return reply(200, await readProjectsJson());
+}
+
+async function handleSubprojectsList() {
+  return reply(200, await readSubprojectsJson());
 }
 
 async function handleProjectCreate(event) {
@@ -183,8 +255,14 @@ async function handleProjectCreate(event) {
   }
   const project = { id: crypto.randomUUID(), name: trimmed, createdAt: new Date().toISOString() };
   projects.push(project);
+
+  // Каждому проекту сразу заводим Common-подпроект.
+  const subprojects = await readSubprojectsJson();
+  const common = ensureCommonSubproject(subprojects, project);
+
   await writeProjectsJson(projects);
-  return reply(200, { ok: true, project });
+  await writeSubprojectsJson(subprojects);
+  return reply(200, { ok: true, project, common });
 }
 
 async function handleProjectRename(event) {
@@ -208,16 +286,19 @@ async function handleProjectDelete(event) {
   checkAuth(event);
   const { id } = JSON.parse(event.body || '{}');
   if (!id) return reply(400, { error: 'id обязателен' });
-  if (id === DEFAULT_PROJECT_ID) {
-    return reply(400, { error: 'Проект по умолчанию нельзя удалить' });
+  if (id === UNKNOWN_PROJECT_ID) {
+    return reply(400, { error: 'Проект Unknown нельзя удалить' });
   }
 
   const projects = await readProjectsJson();
   const idx = projects.findIndex((p) => p.id === id);
   if (idx < 0) return reply(404, { error: 'Проект не найден' });
 
+  const subprojects = await readSubprojectsJson();
+  const subIds = new Set(subprojects.filter((s) => s.projectId === id).map((s) => s.id));
+
   const { models } = await readModelsJson();
-  const inUse = models.filter((m) => m.projectId === id);
+  const inUse = models.filter((m) => subIds.has(m.subprojectId));
   if (inUse.length > 0) {
     return reply(409, {
       error: `В проекте ${inUse.length} модел(ей). Сначала перенесите их в другой проект.`,
@@ -226,7 +307,114 @@ async function handleProjectDelete(event) {
   }
 
   projects.splice(idx, 1);
+  const nextSubprojects = subprojects.filter((s) => s.projectId !== id);
   await writeProjectsJson(projects);
+  await writeSubprojectsJson(nextSubprojects);
+  return reply(200, { ok: true });
+}
+
+// ─── Подпроекты ───────────────────────────────────────────────────────────
+
+async function handleSubprojectCreate(event) {
+  checkAuth(event);
+  const body = JSON.parse(event.body || '{}');
+  const projectId = trimStr(body.projectId, 80);
+  const name = trimStr(body.name, 200);
+  const code = trimStr(body.code, 80);
+  if (!projectId || !name || !code) {
+    return reply(400, { error: 'projectId, name и code обязательны' });
+  }
+
+  const projects = await readProjectsJson();
+  if (!projects.some((p) => p.id === projectId)) {
+    return reply(404, { error: 'Указанный проект не найден' });
+  }
+
+  const subprojects = await readSubprojectsJson();
+  if (subprojects.some((s) => s.code === code)) {
+    return reply(409, { error: `Код "${code}" уже занят другим подпроектом` });
+  }
+
+  const sub = {
+    id: crypto.randomUUID(),
+    code,
+    projectId,
+    name,
+    isCommon: false,
+    createdAt: new Date().toISOString(),
+  };
+  subprojects.push(sub);
+  await writeSubprojectsJson(subprojects);
+  return reply(200, { ok: true, subproject: sub });
+}
+
+async function handleSubprojectUpdate(event) {
+  checkAuth(event);
+  const body = JSON.parse(event.body || '{}');
+  const id = trimStr(body.id, 80);
+  if (!id) return reply(400, { error: 'id обязателен' });
+
+  const subprojects = await readSubprojectsJson();
+  const idx = subprojects.findIndex((s) => s.id === id);
+  if (idx < 0) return reply(404, { error: 'Подпроект не найден' });
+
+  const patch = {};
+  if (body.name !== undefined) {
+    const name = trimStr(body.name, 200);
+    if (!name) return reply(400, { error: 'name не может быть пустым' });
+    patch.name = name;
+  }
+  if (body.code !== undefined) {
+    const code = trimStr(body.code, 80);
+    if (!code) return reply(400, { error: 'code не может быть пустым' });
+    if (subprojects.some((s, i) => i !== idx && s.code === code)) {
+      return reply(409, { error: `Код "${code}" уже занят другим подпроектом` });
+    }
+    patch.code = code;
+  }
+  if (body.projectId !== undefined) {
+    const projectId = trimStr(body.projectId, 80);
+    const projects = await readProjectsJson();
+    if (!projects.some((p) => p.id === projectId)) {
+      return reply(404, { error: 'Указанный проект не найден' });
+    }
+    patch.projectId = projectId;
+  }
+  if (Object.keys(patch).length === 0) {
+    return reply(400, { error: 'Нечего обновлять (name, code и/или projectId)' });
+  }
+
+  subprojects[idx] = { ...subprojects[idx], ...patch };
+  await writeSubprojectsJson(subprojects);
+  return reply(200, { ok: true, subproject: subprojects[idx] });
+}
+
+async function handleSubprojectDelete(event) {
+  checkAuth(event);
+  const { id } = JSON.parse(event.body || '{}');
+  if (!id) return reply(400, { error: 'id обязателен' });
+  if (id === UNKNOWN_COMMON_ID) {
+    return reply(400, { error: 'Подпроект Unknown/Common нельзя удалить' });
+  }
+
+  const subprojects = await readSubprojectsJson();
+  const idx = subprojects.findIndex((s) => s.id === id);
+  if (idx < 0) return reply(404, { error: 'Подпроект не найден' });
+  if (subprojects[idx].isCommon) {
+    return reply(400, { error: 'Common-подпроект нельзя удалить отдельно (удаляется вместе с проектом)' });
+  }
+
+  const { models } = await readModelsJson();
+  const inUse = models.filter((m) => m.subprojectId === id);
+  if (inUse.length > 0) {
+    return reply(409, {
+      error: `В подпроекте ${inUse.length} модел(ей). Сначала перенесите их в другой подпроект.`,
+      modelsCount: inUse.length,
+    });
+  }
+
+  subprojects.splice(idx, 1);
+  await writeSubprojectsJson(subprojects);
   return reply(200, { ok: true });
 }
 
@@ -246,55 +434,29 @@ async function handleUpload(event) {
   const body = JSON.parse(event.body || '{}');
   const { name, size, format } = body;
   const displayName = trimStr(body.displayName, 200);
-  const newProjectName = trimStr(body.newProjectName, 120);
-  let projectId = trimStr(body.projectId, 80);
+  const subprojectId = trimStr(body.subprojectId, 80);
+  const versionName = trimStr(body.versionName, 200);
+  const comment = trimStr(body.comment, 2000);
 
   if (!name || !format) return reply(400, { error: 'name и format обязательны' });
   if (format !== 'glb' && format !== 'gltf') {
     return reply(400, { error: 'Только glb или gltf' });
   }
   if (!displayName) return reply(400, { error: 'displayName обязателен' });
-  if (!projectId && !newProjectName) {
-    return reply(400, { error: 'Укажите projectId или newProjectName' });
+  if (!subprojectId) return reply(400, { error: 'subprojectId обязателен' });
+
+  const subprojects = await readSubprojectsJson();
+  if (!subprojects.some((s) => s.id === subprojectId)) {
+    return reply(404, { error: 'Указанный подпроект не найден' });
   }
 
-  let projects = await readProjectsJson();
-
-  // Создаём новый проект, если запросили
-  if (newProjectName) {
-    if (projects.some((p) => p.name.toLowerCase() === newProjectName.toLowerCase())) {
-      return reply(409, { error: `Проект с именем "${newProjectName}" уже существует` });
-    }
-    const project = { id: crypto.randomUUID(), name: newProjectName, createdAt: new Date().toISOString() };
-    projects.push(project);
-    await writeProjectsJson(projects);
-    projectId = project.id;
-  } else {
-    // Гарантируем существование указанного проекта (особый случай — DEFAULT, его дозаписываем при необходимости)
-    const ensured = ensureProjectExists(projects, projectId);
-    if (ensured.changed) {
-      projects = ensured.projects;
-      await writeProjectsJson(projects);
-    }
-    if (!projects.some((p) => p.id === projectId)) {
-      return reply(404, { error: 'Указанный проект не найден' });
-    }
-  }
-
-  const { models } = await readModelsJson();
-  if (models.some((m) => m.displayName === displayName && m.projectId === projectId)) {
-    return reply(409, { error: `Модель "${displayName}" уже есть в этом проекте` });
-  }
+  const modelDate = normalizeDate(body.modelDate, null);
 
   const id = crypto.randomUUID();
   const key = `models/${Date.now()}_${safeFileName(name)}`;
   const contentType = format === 'glb' ? 'model/gltf-binary' : 'model/gltf+json';
 
-  const command = new PutObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
-    ContentType: contentType,
-  });
+  const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
   const uploadUrl = await getSignedUrl(s3, command, { expiresIn: UPLOAD_URL_TTL });
 
   return reply(200, {
@@ -302,9 +464,12 @@ async function handleUpload(event) {
     uploadHeaders: { 'Content-Type': contentType },
     model: {
       id,
-      name,                // оригинальное имя файла (для скачивания/диагностики)
-      displayName,         // пользовательское имя
-      projectId,
+      name,               // оригинальное имя файла (для скачивания/диагностики)
+      displayName,        // пользовательское имя
+      subprojectId,
+      modelDate,
+      versionName,
+      comment,
       key,
       format,
       size: Number(size) || 0,
@@ -317,17 +482,16 @@ async function handleUpload(event) {
 async function handleCommit(event) {
   checkAuth(event);
   const { model } = JSON.parse(event.body || '{}');
-  if (!model || !model.id || !model.key || !model.name || !model.displayName || !model.projectId) {
-    return reply(400, { error: 'model.{id,key,name,displayName,projectId} обязательны' });
+  if (!model || !model.id || !model.key || !model.name || !model.displayName || !model.subprojectId) {
+    return reply(400, { error: 'model.{id,key,name,displayName,subprojectId} обязательны' });
   }
   const { models } = await readModelsJson();
   if (models.some((m) => m.id === model.id)) {
     return reply(200, { ok: true, duplicate: true });
   }
-  // Проверяем, что проект существует
-  const projects = await readProjectsJson();
-  if (!projects.some((p) => p.id === model.projectId)) {
-    return reply(404, { error: 'Указанный проект не найден' });
+  const subprojects = await readSubprojectsJson();
+  if (!subprojects.some((s) => s.id === model.subprojectId)) {
+    return reply(404, { error: 'Указанный подпроект не найден' });
   }
   models.unshift(model);
   await writeModelsJson(models);
@@ -353,7 +517,7 @@ async function handleDelete(event) {
   return reply(200, { ok: true });
 }
 
-// Обновление displayName и/или projectId существующей модели
+// Обновление полей существующей модели: displayName, subprojectId, modelDate, versionName, comment.
 async function handleModelUpdate(event) {
   checkAuth(event);
   const body = JSON.parse(event.body || '{}');
@@ -366,32 +530,26 @@ async function handleModelUpdate(event) {
     if (!dn) return reply(400, { error: 'displayName не может быть пустым' });
     patch.displayName = dn;
   }
-  if (body.projectId !== undefined) {
-    const pid = trimStr(body.projectId, 80);
-    if (!pid) return reply(400, { error: 'projectId не может быть пустым' });
-    patch.projectId = pid;
-  }
-  if (Object.keys(patch).length === 0) {
-    return reply(400, { error: 'Нечего обновлять (displayName и/или projectId)' });
-  }
-
-  if (patch.projectId) {
-    const projects = await readProjectsJson();
-    if (!projects.some((p) => p.id === patch.projectId)) {
-      return reply(404, { error: 'Указанный проект не найден' });
+  if (body.subprojectId !== undefined) {
+    const sid = trimStr(body.subprojectId, 80);
+    if (!sid) return reply(400, { error: 'subprojectId не может быть пустым' });
+    const subprojects = await readSubprojectsJson();
+    if (!subprojects.some((s) => s.id === sid)) {
+      return reply(404, { error: 'Указанный подпроект не найден' });
     }
+    patch.subprojectId = sid;
+  }
+  if (body.modelDate !== undefined) patch.modelDate = normalizeDate(body.modelDate, null);
+  if (body.versionName !== undefined) patch.versionName = trimStr(body.versionName, 200);
+  if (body.comment !== undefined) patch.comment = trimStr(body.comment, 2000);
+
+  if (Object.keys(patch).length === 0) {
+    return reply(400, { error: 'Нечего обновлять' });
   }
 
   const { models } = await readModelsJson();
   const idx = models.findIndex((m) => m.id === id);
   if (idx < 0) return reply(404, { error: 'Модель не найдена' });
-
-  const targetProject = patch.projectId || models[idx].projectId;
-  const targetDisplay = patch.displayName || models[idx].displayName;
-  // Проверка уникальности имени внутри проекта (кроме самой модели)
-  if (models.some((m, i) => i !== idx && m.projectId === targetProject && m.displayName === targetDisplay)) {
-    return reply(409, { error: `Модель "${targetDisplay}" уже есть в этом проекте` });
-  }
 
   models[idx] = { ...models[idx], ...patch };
   await writeModelsJson(models);
@@ -407,6 +565,7 @@ exports.handler = async (event) => {
   try {
     if (method === 'GET' && (action === '' || action === 'list')) return handleList();
     if (method === 'GET' && action === 'projects') return handleProjectsList();
+    if (method === 'GET' && action === 'subprojects') return handleSubprojectsList();
 
     if (method === 'POST' && action === 'upload') return handleUpload(event);
     if (method === 'POST' && action === 'commit') return handleCommit(event);
@@ -416,6 +575,10 @@ exports.handler = async (event) => {
     if (method === 'POST' && action === 'project-create') return handleProjectCreate(event);
     if (method === 'POST' && action === 'project-rename') return handleProjectRename(event);
     if (method === 'POST' && action === 'project-delete') return handleProjectDelete(event);
+
+    if (method === 'POST' && action === 'subproject-create') return handleSubprojectCreate(event);
+    if (method === 'POST' && action === 'subproject-update') return handleSubprojectUpdate(event);
+    if (method === 'POST' && action === 'subproject-delete') return handleSubprojectDelete(event);
 
     return reply(404, { error: `Не найдено: ${method} ?action=${action}` });
   } catch (err) {

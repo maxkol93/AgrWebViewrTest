@@ -635,6 +635,8 @@
         .agr-field { display: flex; flex-direction: column; gap: 6px; }
         .agr-field label { font-size: 13px; color: #bbb; font-weight: 500; }
         .agr-field input[type="text"],
+        .agr-field input[type="date"],
+        .agr-field textarea,
         .agr-field select {
             font-family: 'Unbounded', sans-serif;
             background-color: #2a2e36;
@@ -645,7 +647,11 @@
             font-size: 14px;
             outline: none;
         }
+        .agr-field textarea { resize: vertical; }
+        .agr-field input[type="date"] { color-scheme: dark; }
         .agr-field input[type="text"]:focus,
+        .agr-field input[type="date"]:focus,
+        .agr-field textarea:focus,
         .agr-field select:focus { border-color: #4285f4; }
         .agr-btn {
             font-family: 'Unbounded', sans-serif;
@@ -675,7 +681,7 @@
             font-size: 13px;
             min-height: 16px;
         }
-        #upload-file-info {
+        #upload-file-info, #model-form-file-info {
             font-size: 13px;
             color: #aaa;
             background-color: rgba(255,255,255,0.04);
@@ -734,6 +740,57 @@
             font-size: 13px;
         }
         .admin-tab.active { background-color: #2a2e36; color: #fff; border-color: #4285f4; }
+        /* Каталог: группы и подпроекты */
+        #admin-projects, #admin-models { max-height: 340px; }
+        .admin-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+        .admin-search {
+            flex: 1; min-width: 160px;
+            font-family: 'Unbounded', sans-serif;
+            background-color: #2a2e36; color: #fff;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 6px; padding: 9px 12px; font-size: 13px; outline: none;
+        }
+        .admin-search:focus { border-color: #4285f4; }
+        .admin-group {
+            font-size: 12px; color: #8ab4ff; font-weight: 600;
+            padding: 8px 8px 2px; letter-spacing: 0.2px;
+        }
+        .admin-project-block { border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px; margin-bottom: 6px; }
+        .admin-subrow { padding-left: 18px; }
+        .admin-subrow .row-main { color: #cfd3da; }
+        .admin-add-sub { padding-left: 18px; gap: 6px; }
+        .admin-input {
+            font-family: 'Unbounded', sans-serif;
+            background-color: #2a2e36; color: #fff;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 6px; padding: 6px 10px; font-size: 12px; outline: none;
+            min-width: 0;
+        }
+        .admin-add-sub .admin-input { flex: 1; }
+        .admin-add-sub .admin-input-code { flex: 0 0 90px; }
+        .admin-input:focus { border-color: #4285f4; }
+        /* Лейбл проекта, комментарий версии и заглушка «не найдено» */
+        #model-selector { flex-direction: column; align-items: stretch; gap: 8px; }
+        #model-selector-row { display: flex; gap: 12px; align-items: center; }
+        #project-label {
+            font-family: 'Unbounded', sans-serif; font-weight: 600;
+            font-size: 15px; color: #fff; max-width: 340px;
+        }
+        #model-comment {
+            font-family: 'Unbounded', sans-serif; font-size: 12px;
+            color: #b8bcc4; max-width: 340px; white-space: normal; line-height: 1.35;
+        }
+        #model-not-found {
+            display: none;
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1500;
+            font-family: 'Unbounded', sans-serif; font-weight: 600;
+            font-size: 24px; color: #fff;
+            background-color: rgba(0,0,0,0.7);
+            padding: 20px 34px; border-radius: 12px;
+            text-align: center;
+        }
         #admin-settings-btn {
             position: absolute;
             top: 20px;
@@ -1055,19 +1112,18 @@
         <div class="loading">Загрузка модели...</div>
         <button id="skipHDR">Пропустить загрузку HDR</button>
         
-        <div id="model-selector">
-            <!-- Убираем label -->
-            <select id="model-select">
-            </select>
-            <button id="share-model-btn" class="control-btn" title="Скопировать ссылку на эту модель">Поделиться</button>
+        <div id="model-selector" style="display:none">
+            <div id="project-label"></div>
+            <div id="model-selector-row">
+                <select id="model-select"></select>
+                <button id="share-model-btn" class="control-btn" title="Скопировать ссылку на эту модель">Поделиться</button>
+            </div>
+            <div id="model-comment"></div>
         </div>
-        
-        <!-- Переименовываем элемент и добавляем класс -->
-        <div id="upload-model-container" class="model-upload-btn">
-            <input type="file" id="custom-file-upload" accept=".glb,.gltf">
-            <button id="file-upload-btn">Загрузить свою модель</button>
-        </div>
-        
+
+        <!-- Заглушка, когда по коду нет моделей -->
+        <div id="model-not-found">Модель не найдена!</div>
+
         <div id="controls" class="controls">
             <button id="reset-camera" class="control-btn">Сброс камеры</button>
             <button id="toggle-control" class="control-btn">WASD управление</button>
@@ -1197,44 +1253,49 @@
         </div>
     </div>
 
-    <!-- Модалка: параметры загружаемой модели -->
-    <div id="upload-modal" class="agr-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title">
+    <!-- Модалка: загрузка/редактирование модели -->
+    <div id="model-form-modal" class="agr-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="model-form-title">
         <div class="agr-modal">
             <div class="agr-modal-header">
-                <span id="upload-modal-title">Загрузка модели</span>
-                <button type="button" class="agr-modal-close" data-modal-close="upload-modal" aria-label="Закрыть">×</button>
+                <span id="model-form-title">Загрузка модели</span>
+                <button type="button" class="agr-modal-close" data-modal-close="model-form-modal" aria-label="Закрыть">×</button>
             </div>
             <div class="agr-modal-body">
-                <div id="upload-file-info">Файл не выбран</div>
+                <div id="model-form-file-info"></div>
                 <div class="agr-field">
-                    <label for="upload-display-name">Название модели</label>
-                    <input type="text" id="upload-display-name" maxlength="200" autocomplete="off" placeholder="Например: Фасад финал">
+                    <label for="model-form-project">Проект</label>
+                    <select id="model-form-project"></select>
                 </div>
                 <div class="agr-field">
-                    <label>Проект</label>
-                    <div class="agr-radio-row">
-                        <label><input type="radio" name="upload-project-mode" value="existing" checked> Существующий</label>
-                        <label><input type="radio" name="upload-project-mode" value="new"> Новый</label>
-                    </div>
+                    <label for="model-form-subproject">Подпроект (Очередь/Этап)</label>
+                    <select id="model-form-subproject"></select>
                 </div>
-                <div class="agr-field" id="upload-project-existing-wrap">
-                    <label for="upload-project-select">Выберите проект</label>
-                    <select id="upload-project-select"></select>
+                <div class="agr-field">
+                    <label for="model-form-display">Название модели</label>
+                    <input type="text" id="model-form-display" maxlength="200" autocomplete="off" placeholder="Например: Фасад финал">
                 </div>
-                <div class="agr-field" id="upload-project-new-wrap" style="display:none">
-                    <label for="upload-new-project-name">Название нового проекта</label>
-                    <input type="text" id="upload-new-project-name" maxlength="120" autocomplete="off" placeholder="Например: Дом на Тверской">
+                <div class="agr-field">
+                    <label for="model-form-version">Название версии (необязательно)</label>
+                    <input type="text" id="model-form-version" maxlength="200" autocomplete="off" placeholder="Например: обновлённый двор">
                 </div>
-                <div class="agr-error" id="upload-error"></div>
+                <div class="agr-field">
+                    <label for="model-form-date">Дата модели</label>
+                    <input type="date" id="model-form-date">
+                </div>
+                <div class="agr-field">
+                    <label for="model-form-comment">Комментарий (необязательно)</label>
+                    <textarea id="model-form-comment" maxlength="2000" rows="2" placeholder="Описание версии, подмодели и т.п."></textarea>
+                </div>
+                <div class="agr-error" id="model-form-error"></div>
             </div>
             <div class="agr-modal-footer">
-                <button type="button" class="agr-btn secondary" data-modal-close="upload-modal">Отмена</button>
-                <button type="button" class="agr-btn" id="upload-confirm-btn">Загрузить</button>
+                <button type="button" class="agr-btn secondary" data-modal-close="model-form-modal">Отмена</button>
+                <button type="button" class="agr-btn" id="model-form-confirm">Сохранить</button>
             </div>
         </div>
     </div>
 
-    <!-- Админ-панель: проекты и модели -->
+    <!-- Админ-панель: модели и каталог (проекты/подпроекты) -->
     <div id="admin-modal" class="agr-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
         <div class="agr-modal">
             <div class="agr-modal-header">
@@ -1244,16 +1305,21 @@
             <div class="agr-modal-body">
                 <div class="admin-tabs">
                     <button type="button" class="admin-tab active" data-admin-tab="models">Модели</button>
-                    <button type="button" class="admin-tab" data-admin-tab="projects">Проекты</button>
+                    <button type="button" class="admin-tab" data-admin-tab="catalog">Каталог</button>
                 </div>
                 <div id="admin-tab-models">
+                    <div class="admin-toolbar">
+                        <button type="button" class="agr-btn" id="admin-upload-btn">＋ Загрузить модель</button>
+                        <input type="file" id="admin-file-input" accept=".glb,.gltf" style="display:none">
+                        <input type="text" id="admin-model-search" class="admin-search" placeholder="Поиск: проект, подпроект, код, модель…">
+                    </div>
                     <div id="admin-models"></div>
                 </div>
-                <div id="admin-tab-projects" style="display:none">
+                <div id="admin-tab-catalog" style="display:none">
                     <div class="agr-field">
                         <label for="admin-new-project-name">Новый проект</label>
                         <div style="display:flex; gap:8px;">
-                            <input type="text" id="admin-new-project-name" maxlength="120" placeholder="Название проекта" style="flex:1; background-color:#2a2e36; color:#fff; border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:10px 12px; font-family:'Unbounded',sans-serif; font-size:14px; outline:none;">
+                            <input type="text" id="admin-new-project-name" maxlength="120" placeholder="Название проекта" class="admin-input" style="flex:1;">
                             <button type="button" class="agr-btn" id="admin-create-project-btn">Создать</button>
                         </div>
                     </div>

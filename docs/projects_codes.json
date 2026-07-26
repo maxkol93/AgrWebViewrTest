@@ -1,0 +1,877 @@
+[
+  {
+    "code": "314925",
+    "project": "26 ПаркВью",
+    "subproject": "26 ПаркВью"
+  },
+  {
+    "code": "315443",
+    "project": "Bell",
+    "subproject": "Bell"
+  },
+  {
+    "code": "314480",
+    "project": "Chess",
+    "subproject": "Chess 1 оч."
+  },
+  {
+    "code": "314486",
+    "project": "Chess",
+    "subproject": "Chess 2 оч."
+  },
+  {
+    "code": "314487",
+    "project": "Chess",
+    "subproject": "Chess 3 оч."
+  },
+  {
+    "code": "314466",
+    "project": "City Bay",
+    "subproject": "City Bay 2 оч. 2 этап"
+  },
+  {
+    "code": "314467",
+    "project": "City Bay",
+    "subproject": "City Bay 3 оч. 1 этап"
+  },
+  {
+    "code": "314468",
+    "project": "City Bay",
+    "subproject": "City Bay 3 оч. 2 этап (Школа)"
+  },
+  {
+    "code": "314474",
+    "project": "City Bay",
+    "subproject": "City Bay 5 оч. Cliff5"
+  },
+  {
+    "code": "314475",
+    "project": "City Bay",
+    "subproject": "City Bay 6 оч."
+  },
+  {
+    "code": "315066",
+    "project": "City Bay",
+    "subproject": "City Bay 1 оч. 2 этап"
+  },
+  {
+    "code": "315067",
+    "project": "City Bay",
+    "subproject": "City Bay 2 оч. 1 этап"
+  },
+  {
+    "code": "314677",
+    "project": "CLOS 17",
+    "subproject": "CLOS 17"
+  },
+  {
+    "code": "314845",
+    "project": "Domenic",
+    "subproject": "Domenic 1 оч. 2 этап (ЖК1)"
+  },
+  {
+    "code": "5313249",
+    "project": "Domenic",
+    "subproject": "Domenic 1 оч. 1 этап (Офис)"
+  },
+  {
+    "code": "5313321",
+    "project": "Domenic",
+    "subproject": "Domenic 1 оч. 3 этап (Школа)"
+  },
+  {
+    "code": "6551857",
+    "project": "Domenic",
+    "subproject": "Domenic 2 оч. 1 этап (ОКН)"
+  },
+  {
+    "code": "6556430",
+    "project": "Domenic",
+    "subproject": "Domenic 2 оч. 2 этап (ЖК2)"
+  },
+  {
+    "code": "6556431",
+    "project": "Domenic",
+    "subproject": "Domenic 2 оч. 3 этап (ЖК3)"
+  },
+  {
+    "code": "314500",
+    "project": "FORUM",
+    "subproject": "FORUM"
+  },
+  {
+    "code": "314472",
+    "project": "iCITY",
+    "subproject": "iCITY"
+  },
+  {
+    "code": "314558",
+    "project": "Jois",
+    "subproject": "Jois 1"
+  },
+  {
+    "code": "314682",
+    "project": "Jois",
+    "subproject": "Jois 2"
+  },
+  {
+    "code": "314683",
+    "project": "Jois",
+    "subproject": "Jois БЦ"
+  },
+  {
+    "code": "315187",
+    "project": "Link",
+    "subproject": "Link"
+  },
+  {
+    "code": "314678",
+    "project": "LUCE",
+    "subproject": "LUCE"
+  },
+  {
+    "code": "314464",
+    "project": "MOD",
+    "subproject": "MOD"
+  },
+  {
+    "code": "314496",
+    "project": "Nicole 1",
+    "subproject": "Nicole 1"
+  },
+  {
+    "code": "314498",
+    "project": "Nicole 2",
+    "subproject": "Nicole 2"
+  },
+  {
+    "code": "314716",
+    "project": "One",
+    "subproject": "One"
+  },
+  {
+    "code": "314481",
+    "project": "Seliger City",
+    "subproject": "Seliger City 4 оч."
+  },
+  {
+    "code": "314701",
+    "project": "SET",
+    "subproject": "SET 2 оч. OF3a"
+  },
+  {
+    "code": "314702",
+    "project": "SET",
+    "subproject": "SET 2 оч. SO1+SO2"
+  },
+  {
+    "code": "314705",
+    "project": "SET",
+    "subproject": "SET 1 оч. UB2"
+  },
+  {
+    "code": "314706",
+    "project": "SET",
+    "subproject": "SET 2 оч. UB3b"
+  },
+  {
+    "code": "314707",
+    "project": "SET",
+    "subproject": "SET 1 оч. UB3c"
+  },
+  {
+    "code": "314463",
+    "project": "SLAVA",
+    "subproject": "SLAVA 1 оч."
+  },
+  {
+    "code": "314482",
+    "project": "SLAVA",
+    "subproject": "SLAVA 2 оч."
+  },
+  {
+    "code": "314483",
+    "project": "SLAVA",
+    "subproject": "SLAVA 4 оч."
+  },
+  {
+    "code": "314690",
+    "project": "SLAVA",
+    "subproject": "SLAVA 5 оч."
+  },
+  {
+    "code": "314469",
+    "project": "SYMPHONY 34",
+    "subproject": "SYMPHONY 34"
+  },
+  {
+    "code": "314954",
+    "project": "TOP Tower",
+    "subproject": "TOP Tower"
+  },
+  {
+    "code": "314692",
+    "project": "VEER",
+    "subproject": "VEER 1 оч. OF4"
+  },
+  {
+    "code": "314694",
+    "project": "VEER",
+    "subproject": "VEER 1 оч. UB10"
+  },
+  {
+    "code": "314698",
+    "project": "VEER",
+    "subproject": "VEER 1 оч. UB9"
+  },
+  {
+    "code": "314752",
+    "project": "VEER",
+    "subproject": "VEER 2 оч. UB9a"
+  },
+  {
+    "code": "314757",
+    "project": "VEER",
+    "subproject": "VEER 2 оч. UB8"
+  },
+  {
+    "code": "314758",
+    "project": "VEER",
+    "subproject": "VEER 2 оч. SO3"
+  },
+  {
+    "code": "314759",
+    "project": "VEER",
+    "subproject": "VEER 3 оч. OF2"
+  },
+  {
+    "code": "315343",
+    "project": "VEER",
+    "subproject": "VEER 3 оч. OF1"
+  },
+  {
+    "code": "314497",
+    "project": "Yandex",
+    "subproject": "Yandex"
+  },
+  {
+    "code": "314688",
+    "project": "Абрикосов",
+    "subproject": "Абрикосов"
+  },
+  {
+    "code": "314684",
+    "project": "аватар",
+    "subproject": "аватар"
+  },
+  {
+    "code": "9134498",
+    "project": "Бабёнки",
+    "subproject": "Бабёнки"
+  },
+  {
+    "code": "16382694",
+    "project": "Белобородова 50",
+    "subproject": "Белобородова 50"
+  },
+  {
+    "code": "315027",
+    "project": "Большая Дмитровка 7/5",
+    "subproject": "Большая Дмитровка 7/5"
+  },
+  {
+    "code": "9134492",
+    "project": "Бусиновская горка",
+    "subproject": "Бусиновская горка"
+  },
+  {
+    "code": "12799434",
+    "project": "Бутово_ПП 188",
+    "subproject": "Бутово_ПП 188"
+  },
+  {
+    "code": "17647710",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB1"
+  },
+  {
+    "code": "22663764",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB2"
+  },
+  {
+    "code": "22676805",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB3"
+  },
+  {
+    "code": "22676807",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB4"
+  },
+  {
+    "code": "22676809",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB5"
+  },
+  {
+    "code": "22676811",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB6"
+  },
+  {
+    "code": "22676813",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB7"
+  },
+  {
+    "code": "22676815",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB8"
+  },
+  {
+    "code": "22676817",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB9"
+  },
+  {
+    "code": "22676819",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB10"
+  },
+  {
+    "code": "22676821",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB11"
+  },
+  {
+    "code": "22676823",
+    "project": "Верейская 3",
+    "subproject": "Верейская 3 UB12"
+  },
+  {
+    "code": "314934",
+    "project": "Вилюйская",
+    "subproject": "Вилюйская 1 оч."
+  },
+  {
+    "code": "314935",
+    "project": "Вилюйская",
+    "subproject": "Вилюйская 2 оч."
+  },
+  {
+    "code": "22378126",
+    "project": "Гашека",
+    "subproject": "Гашека"
+  },
+  {
+    "code": "314714",
+    "project": "Демидов 26 / Усадьба Демидова",
+    "subproject": "Демидов 26 / Усадьба Демидова Демидов 26"
+  },
+  {
+    "code": "1524790",
+    "project": "Демидов 26 / Усадьба Демидова",
+    "subproject": "Демидов 26 / Усадьба Демидова Усадьба Демидова (ОКН)"
+  },
+  {
+    "code": "22749137",
+    "project": "Денежный 24",
+    "subproject": "Денежный 24"
+  },
+  {
+    "code": "512260",
+    "project": "Депо",
+    "subproject": "Депо ОКН"
+  },
+  {
+    "code": "21937693",
+    "project": "Депо",
+    "subproject": "Депо Торговые ряды"
+  },
+  {
+    "code": "21937695",
+    "project": "Депо",
+    "subproject": "Депо ЭКСПО"
+  },
+  {
+    "code": "315011",
+    "project": "Дом Соболева",
+    "subproject": "Дом Соболева"
+  },
+  {
+    "code": "315115",
+    "project": "Завод Полимербыт",
+    "subproject": "Завод Полимербыт"
+  },
+  {
+    "code": "436861",
+    "project": "Знаки",
+    "subproject": "Знаки ЖК"
+  },
+  {
+    "code": "24955007",
+    "project": "Знаки",
+    "subproject": "Знаки Школа"
+  },
+  {
+    "code": "440502",
+    "project": "Казачий",
+    "subproject": "Казачий НС"
+  },
+  {
+    "code": "1524788",
+    "project": "Казачий",
+    "subproject": "Казачий ОКН"
+  },
+  {
+    "code": "488574",
+    "project": "Касаткина",
+    "subproject": "Касаткина"
+  },
+  {
+    "code": "314728",
+    "project": "Климашкина 7/11",
+    "subproject": "Климашкина 7/11"
+  },
+  {
+    "code": "6602116",
+    "project": "Косино",
+    "subproject": "Косино"
+  },
+  {
+    "code": "20473559",
+    "project": "Лужнецкая набережная",
+    "subproject": "Лужнецкая набережная"
+  },
+  {
+    "code": "314470",
+    "project": "Метрополия",
+    "subproject": "Метрополия 2 оч. 1.2. Этап"
+  },
+  {
+    "code": "314473",
+    "project": "Метрополия",
+    "subproject": "Метрополия 3 оч."
+  },
+  {
+    "code": "314484",
+    "project": "Метрополия",
+    "subproject": "Метрополия 2 оч. 2 Этап"
+  },
+  {
+    "code": "315162",
+    "project": "Метрополия",
+    "subproject": "Метрополия 2 оч. 2 этап (Школа)"
+  },
+  {
+    "code": "314679",
+    "project": "МИRА",
+    "subproject": "МИRА"
+  },
+  {
+    "code": "314943",
+    "project": "Мосфильмовская",
+    "subproject": "Мосфильмовская"
+  },
+  {
+    "code": "314687",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 1 этап (UB 1,2)"
+  },
+  {
+    "code": "5409281",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 2 этап (КД 8,9,10)"
+  },
+  {
+    "code": "8266286",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 3 этап (UB 3,4,5)"
+  },
+  {
+    "code": "8266320",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 8 этап - ЛОС"
+  },
+  {
+    "code": "8266321",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 7 этап - Котельная"
+  },
+  {
+    "code": "18506150",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 6 этап - Детский сад"
+  },
+  {
+    "code": "19011485",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 4 этап (UB 6,7)"
+  },
+  {
+    "code": "22378112",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 12 этап ИЖС"
+  },
+  {
+    "code": "22378114",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 13 этап Таунхаусы"
+  },
+  {
+    "code": "22863314",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 1 оч. 5 этап КД (11-13)"
+  },
+  {
+    "code": "23326238",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 2 оч. ДОУ (250 мест)"
+  },
+  {
+    "code": "23326240",
+    "project": "МЫ.С",
+    "subproject": "МЫ.С 2 оч. СОШ (1250 мест)"
+  },
+  {
+    "code": "9049748",
+    "project": "Новоорловская 7б",
+    "subproject": "Новоорловская 7б"
+  },
+  {
+    "code": "314933",
+    "project": "О Да",
+    "subproject": "О Да 1 оч. (МКД 6.1)"
+  },
+  {
+    "code": "8266257",
+    "project": "О Да",
+    "subproject": "О Да Школа (реновация)"
+  },
+  {
+    "code": "8266259",
+    "project": "О Да",
+    "subproject": "О Да 2 оч. (МКД 7.1)"
+  },
+  {
+    "code": "8266261",
+    "project": "О Да",
+    "subproject": "О Да 3 оч. (ПБ 30.1)"
+  },
+  {
+    "code": "23966516",
+    "project": "О Да",
+    "subproject": "О Да 2 оч. (ФОК 23.1)"
+  },
+  {
+    "code": "23966517",
+    "project": "О Да",
+    "subproject": "О Да 4 оч. (ДОО 18.1)"
+  },
+  {
+    "code": "23966518",
+    "project": "О Да",
+    "subproject": "О Да 4 оч. Поликлиника"
+  },
+  {
+    "code": "24955002",
+    "project": "О Да",
+    "subproject": "О Да 2 оч. (УВК 17.1)"
+  },
+  {
+    "code": "5308788",
+    "project": "Олсуфьевский",
+    "subproject": "Олсуфьевский"
+  },
+  {
+    "code": "8266249",
+    "project": "Ордынка",
+    "subproject": "Ордынка ЖК"
+  },
+  {
+    "code": "22676801",
+    "project": "Ордынка",
+    "subproject": "Ордынка ОКН"
+  },
+  {
+    "code": "5837286",
+    "project": "Остоженка 8",
+    "subproject": "Остоженка 8"
+  },
+  {
+    "code": "314478",
+    "project": "Павелецкая сити",
+    "subproject": "Павелецкая сити 1 оч."
+  },
+  {
+    "code": "314479",
+    "project": "Павелецкая сити",
+    "subproject": "Павелецкая сити 2 оч."
+  },
+  {
+    "code": "315192",
+    "project": "Парк Лето",
+    "subproject": "Парк Лето"
+  },
+  {
+    "code": "315188",
+    "project": "Парк М-4",
+    "subproject": "Парк М-4"
+  },
+  {
+    "code": "1884834",
+    "project": "Планетная",
+    "subproject": "Планетная"
+  },
+  {
+    "code": "315114",
+    "project": "Промпарк Руднево",
+    "subproject": "Промпарк Руднево Оч. 1 (К Л3)"
+  },
+  {
+    "code": "315180",
+    "project": "Промпарк Руднево",
+    "subproject": "Промпарк Руднево Оч. 2 (К А2)"
+  },
+  {
+    "code": "6620415",
+    "project": "Раменское 2",
+    "subproject": "Раменское 2"
+  },
+  {
+    "code": "314736",
+    "project": "Раушская",
+    "subproject": "Раушская"
+  },
+  {
+    "code": "314846",
+    "project": "РОДЕН",
+    "subproject": "РОДЕН"
+  },
+  {
+    "code": "314499",
+    "project": "Рублевское 66-68",
+    "subproject": "Рублевское 66-68"
+  },
+  {
+    "code": "314866",
+    "project": "Рябиновая 44",
+    "subproject": "Рябиновая 44"
+  },
+  {
+    "code": "315164",
+    "project": "Рябиновая 46",
+    "subproject": "Рябиновая 46"
+  },
+  {
+    "code": "315003",
+    "project": "С5/MIND",
+    "subproject": "С5/MIND C5 (ЖК)"
+  },
+  {
+    "code": "2595759",
+    "project": "С5/MIND",
+    "subproject": "С5/MIND MIND (БЦ)"
+  },
+  {
+    "code": "6549570",
+    "project": "Сколково",
+    "subproject": "Сколково 1 оч."
+  },
+  {
+    "code": "6549572",
+    "project": "Сколково",
+    "subproject": "Сколково 2 оч."
+  },
+  {
+    "code": "5679300",
+    "project": "Слободской",
+    "subproject": "Слободской"
+  },
+  {
+    "code": "6486739",
+    "project": "СОТА",
+    "subproject": "СОТА"
+  },
+  {
+    "code": "8266354",
+    "project": "Спиридоновка 19А",
+    "subproject": "Спиридоновка 19А"
+  },
+  {
+    "code": "26235367",
+    "project": "Староваганьковский 19",
+    "subproject": "Староваганьковский 19"
+  },
+  {
+    "code": "8266250",
+    "project": "Старопименовский",
+    "subproject": "Старопименовский"
+  },
+  {
+    "code": "2936857",
+    "project": "Ступинский",
+    "subproject": "Ступинский"
+  },
+  {
+    "code": "14402208",
+    "project": "Таганская 39",
+    "subproject": "Таганская 39"
+  },
+  {
+    "code": "314953",
+    "project": "Тверская",
+    "subproject": "Тверская"
+  },
+  {
+    "code": "933959",
+    "project": "Трифоновская",
+    "subproject": "Трифоновская"
+  },
+  {
+    "code": "314485",
+    "project": "Тушино",
+    "subproject": "Тушино 1 оч. Cityzen"
+  },
+  {
+    "code": "314502",
+    "project": "Тушино",
+    "subproject": "Тушино Cityzen Tr. 1 UB8b"
+  },
+  {
+    "code": "315040",
+    "project": "Тушино",
+    "subproject": "Тушино Cityzen Tr. 2 OF8a"
+  },
+  {
+    "code": "17647716",
+    "project": "Тушино",
+    "subproject": "Тушино Cityzen Tr. 3 OF9"
+  },
+  {
+    "code": "18217249",
+    "project": "Тушино",
+    "subproject": "Тушино 3 оч. UB3e"
+  },
+  {
+    "code": "18217250",
+    "project": "Тушино",
+    "subproject": "Тушино 3 оч. UB3c+UB3d"
+  },
+  {
+    "code": "18217251",
+    "project": "Тушино",
+    "subproject": "Тушино 3 оч. OF6a"
+  },
+  {
+    "code": "18316125",
+    "project": "Тушино",
+    "subproject": "Тушино 3 оч. UB6b"
+  },
+  {
+    "code": "19017621",
+    "project": "Тушино",
+    "subproject": "Тушино 3 оч. SO6"
+  },
+  {
+    "code": "314909",
+    "project": "Тушино Пул 2",
+    "subproject": "Тушино Пул 2 2 оч. UB2"
+  },
+  {
+    "code": "315041",
+    "project": "Тушино Пул 2",
+    "subproject": "Тушино Пул 2 2 оч. Школа SO2"
+  },
+  {
+    "code": "8266276",
+    "project": "Тушино Пул 2",
+    "subproject": "Тушино Пул 2 2 оч. UB2b"
+  },
+  {
+    "code": "8266278",
+    "project": "Тушино Пул 2",
+    "subproject": "Тушино Пул 2 2 оч. UB2c"
+  },
+  {
+    "code": "21128757",
+    "project": "Тушино Пул 2",
+    "subproject": "Тушино Пул 2 2 оч. UB2a"
+  },
+  {
+    "code": "21130397",
+    "project": "Тушино Пул 2",
+    "subproject": "Тушино Пул 2 2 оч. UB2g"
+  },
+  {
+    "code": "314477",
+    "project": "У реки. Эко Видное 2.0",
+    "subproject": "У реки. Эко Видное 2.0 3 оч. 1 этап (4к)"
+  },
+  {
+    "code": "314507",
+    "project": "У реки. Эко Видное 2.0",
+    "subproject": "У реки. Эко Видное 2.0 3 оч. 2 этап (6к)"
+  },
+  {
+    "code": "314504",
+    "project": "Фили Сити",
+    "subproject": "Фили Сити 1 оч."
+  },
+  {
+    "code": "314505",
+    "project": "Фили Сити",
+    "subproject": "Фили Сити 2 оч. Famous / Noble"
+  },
+  {
+    "code": "12785549",
+    "project": "Хуторская 2",
+    "subproject": "Хуторская 2"
+  },
+  {
+    "code": "314907",
+    "project": "Шишкин Лес",
+    "subproject": "Шишкин Лес 1 оч. ШЛ1"
+  },
+  {
+    "code": "314908",
+    "project": "Шишкин Лес",
+    "subproject": "Шишкин Лес 1 оч. ШЛ2"
+  },
+  {
+    "code": "314986",
+    "project": "Шишкин Лес",
+    "subproject": "Шишкин Лес 2 оч. ШЛ3"
+  },
+  {
+    "code": "314987",
+    "project": "Шишкин Лес",
+    "subproject": "Шишкин Лес 1 оч. ШЛ4"
+  },
+  {
+    "code": "314988",
+    "project": "Шишкин Лес",
+    "subproject": "Шишкин Лес 2 оч. ШЛ5"
+  },
+  {
+    "code": "314989",
+    "project": "Шишкин Лес",
+    "subproject": "Шишкин Лес 2 оч. ШЛ6"
+  },
+  {
+    "code": "4479878",
+    "project": "Шишкин Лес",
+    "subproject": "Шишкин Лес 2 оч. ШЛ7"
+  },
+  {
+    "code": "314676",
+    "project": "Щербаковская 5а",
+    "subproject": "Щербаковская 5а"
+  },
+  {
+    "code": "315071",
+    "project": "ЭЛЕРОН",
+    "subproject": "ЭЛЕРОН"
+  }
+]

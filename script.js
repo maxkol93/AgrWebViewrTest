@@ -94,20 +94,23 @@ async function fetchModels() {
         document.querySelector('.loading').textContent = 'Загрузка списка моделей...';
         document.querySelector('.loading').style.display = 'block';
 
-        // Параллельно тянем проекты и модели
-        const [projectsData, modelsData] = await Promise.all([
+        // Параллельно тянем проекты, подпроекты и модели
+        const [projectsData, subprojectsData, modelsData] = await Promise.all([
             fetchProjectsRaw(),
+            fetchSubprojectsRaw(),
             fetchModelsRaw(),
         ]);
 
-        userProjects = ensureDefaultProjectLocally(projectsData);
+        userProjects = ensureUnknownLocally(projectsData);
+        userSubprojects = ensureUnknownCommonLocally(subprojectsData);
         userModels = modelsData.map(normalizeModelEntry);
 
-        console.log('Получены модели:', userModels.length, 'проектов:', userProjects.length);
-        rebuildModelSelector();
+        console.log('Получены модели:', userModels.length,
+            'проектов:', userProjects.length, 'подпроектов:', userSubprojects.length);
 
         localStorage.setItem('userModels', JSON.stringify(userModels));
         localStorage.setItem('userProjects', JSON.stringify(userProjects));
+        localStorage.setItem('userSubprojects', JSON.stringify(userSubprojects));
         document.querySelector('.loading').style.display = 'none';
     } catch (error) {
         console.error('Ошибка при получении моделей:', error);
@@ -127,8 +130,8 @@ async function fetchModelsRaw() {
     throw new Error(`HTTP ${res.status} при чтении models.json`);
 }
 
-// Чтение projects.json напрямую из бакета. Если файла нет, вернём [] — дефолтный
-// проект подмешает ensureDefaultProjectLocally.
+// Чтение projects.json напрямую из бакета. Если файла нет, вернём [] — проект
+// Unknown подмешает ensureUnknownLocally.
 async function fetchProjectsRaw() {
     try {
         const res = await fetch(`${STORAGE_BASE_URL}/projects.json?t=${Date.now()}`, { cache: 'no-store' });
@@ -141,47 +144,124 @@ async function fetchProjectsRaw() {
     }
 }
 
-function ensureDefaultProjectLocally(projects) {
+// Чтение subprojects.json напрямую из бакета.
+async function fetchSubprojectsRaw() {
+    try {
+        const res = await fetch(`${STORAGE_BASE_URL}/subprojects.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (res.ok) return res.json();
+        if (res.status === 404) return [];
+        throw new Error(`HTTP ${res.status} при чтении subprojects.json`);
+    } catch (e) {
+        console.warn('Не удалось загрузить subprojects.json, использую дефолт:', e);
+        return [];
+    }
+}
+
+function ensureUnknownLocally(projects) {
     const arr = Array.isArray(projects) ? projects.slice() : [];
-    if (!arr.some((p) => p && p.id === DEFAULT_PROJECT_ID)) {
-        arr.unshift({ id: DEFAULT_PROJECT_ID, name: DEFAULT_PROJECT_NAME, createdAt: new Date(0).toISOString() });
+    if (!arr.some((p) => p && p.id === UNKNOWN_PROJECT_ID)) {
+        arr.unshift({ id: UNKNOWN_PROJECT_ID, name: UNKNOWN_PROJECT_NAME, createdAt: new Date(0).toISOString() });
+    }
+    return arr;
+}
+
+function ensureUnknownCommonLocally(subprojects) {
+    const arr = Array.isArray(subprojects) ? subprojects.slice() : [];
+    if (!arr.some((s) => s && s.id === UNKNOWN_COMMON_ID)) {
+        arr.unshift({
+            id: UNKNOWN_COMMON_ID, code: 'unknown-common', projectId: UNKNOWN_PROJECT_ID,
+            name: COMMON_NAME, isCommon: true, createdAt: new Date(0).toISOString(),
+        });
     }
     return arr;
 }
 
 function normalizeModelEntry(model) {
     if (!model || typeof model !== 'object') return model;
-    return {
-        ...model,
-        displayName: model.displayName || model.name || 'Без имени',
-        projectId: model.projectId || DEFAULT_PROJECT_ID,
-    };
+    const m = { ...model };
+    m.displayName = m.displayName || m.name || 'Без имени';
+    // Обратная совместимость: старое поле projectId больше не используется.
+    m.subprojectId = m.subprojectId || UNKNOWN_COMMON_ID;
+    if (m.projectId !== undefined) delete m.projectId;
+    m.modelDate = normalizeDateStr(m.modelDate, m.uploadedAt);
+    m.versionName = m.versionName || '';
+    m.comment = m.comment || '';
+    return m;
 }
 
+// ─── Хелперы доменной модели ────────────────────────────────────────────────
+
+function getProject(projectId) {
+    return (userProjects || []).find((p) => p && p.id === projectId) || null;
+}
 function getProjectName(projectId) {
-    const p = (userProjects || []).find((x) => x && x.id === projectId);
-    return p ? p.name : DEFAULT_PROJECT_NAME;
+    const p = getProject(projectId);
+    return p ? p.name : UNKNOWN_PROJECT_NAME;
+}
+function getSubproject(subprojectId) {
+    return (userSubprojects || []).find((s) => s && s.id === subprojectId) || null;
+}
+function getSubprojectByCode(code) {
+    const needle = String(code == null ? '' : code).trim();
+    if (!needle) return null;
+    return (userSubprojects || []).find((s) => s && String(s.code) === needle) || null;
+}
+function getProjectOfSubproject(sub) {
+    return sub ? getProject(sub.projectId) : null;
+}
+function modelsOfSubproject(subprojectId) {
+    return (userModels || [])
+        .filter((m) => m && m.subprojectId === subprojectId)
+        .sort((a, b) => String(b.modelDate).localeCompare(String(a.modelDate)));
 }
 
-function formatModelLabel(model) {
-    const proj = getProjectName(model.projectId);
-    const dn = model.displayName || model.name || 'Без имени';
-    return `${proj} — ${dn}`;
+// Дата в YYYY-MM-DD (внутренний формат).
+function normalizeDateStr(v, fallbackIso) {
+    if (typeof v === 'string') {
+        const m = v.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    }
+    const d = fallbackIso ? new Date(fallbackIso) : new Date();
+    if (isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+    return d.toISOString().slice(0, 10);
+}
+// Дата для показа: ДД.ММ.ГГГГ.
+function formatDateRu(iso) {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : String(iso || '');
+}
+
+// Статичный лейбл над селектором по согласованному правилу:
+//  • Common-подпроект → имя проекта;
+//  • имя подпроекта содержит имя проекта → имя подпроекта;
+//  • иначе → «Проект — Подпроект».
+function computeProjectLabel(sub) {
+    if (!sub) return '';
+    const project = getProjectOfSubproject(sub);
+    const pName = project ? project.name : '';
+    const sName = sub.name || '';
+    if (sub.isCommon) return pName || sName;
+    if (pName && sName.toLowerCase().includes(pName.toLowerCase())) return sName;
+    if (!pName) return sName;
+    return `${pName} — ${sName}`;
+}
+
+// Подпись версии в селекторе: «ДД.ММ.ГГГГ — versionName» (без versionName — только дата).
+function formatVersionLabel(model) {
+    const date = formatDateRu(model.modelDate);
+    const vn = (model.versionName || '').trim();
+    return vn ? `${date} — ${vn}` : date;
 }
 
 // Загрузка файла модели в Object Storage через подписанный URL от Cloud Function.
-// meta: { displayName, projectId?, newProjectName? }
+// meta: { displayName, subprojectId, versionName?, modelDate?, comment? }
 async function uploadModel(file, meta) {
     try {
         if (!storageConfigured && !initStorage()) {
             throw new Error('Хранилище не настроено');
         }
-        if (!meta || !meta.displayName) {
-            throw new Error('Не задано название модели');
-        }
-        if (!meta.projectId && !meta.newProjectName) {
-            throw new Error('Не задан проект для модели');
-        }
+        if (!meta || !meta.displayName) throw new Error('Не задано название модели');
+        if (!meta.subprojectId) throw new Error('Не задан подпроект для модели');
 
         const format = file.name.split('.').pop().toLowerCase();
         if (format !== 'glb' && format !== 'gltf') {
@@ -199,8 +279,10 @@ async function uploadModel(file, meta) {
                 size: file.size,
                 format,
                 displayName: meta.displayName,
-                projectId: meta.projectId || undefined,
-                newProjectName: meta.newProjectName || undefined,
+                subprojectId: meta.subprojectId,
+                versionName: meta.versionName || '',
+                modelDate: meta.modelDate || undefined,
+                comment: meta.comment || '',
             },
         });
 
@@ -211,40 +293,19 @@ async function uploadModel(file, meta) {
             headers: uploadHeaders || { 'Content-Type': file.type || 'application/octet-stream' },
             body: file,
         });
-        if (!putRes.ok) {
-            throw new Error(`Ошибка загрузки в хранилище: HTTP ${putRes.status}`);
-        }
+        if (!putRes.ok) throw new Error(`Ошибка загрузки в хранилище: HTTP ${putRes.status}`);
 
         await apiRequest('/commit', { method: 'POST', admin: true, body: { model } });
 
-        // Если только что создан новый проект — подтянем актуальный список
-        if (meta.newProjectName) {
-            try {
-                userProjects = ensureDefaultProjectLocally(await fetchProjectsRaw());
-                localStorage.setItem('userProjects', JSON.stringify(userProjects));
-            } catch (e) {
-                // не критично, проект всё равно прописан в модели
-                console.warn('Не удалось обновить список проектов:', e);
-            }
-        }
-
         const normalized = normalizeModelEntry(model);
         userModels.unshift(normalized);
-        rebuildModelSelector();
-
-        const modelSelect = document.getElementById('model-select');
-        if (modelSelect) {
-            modelSelect.value = normalized.url;
-        }
-        currentModelPath = normalized.url;
-
         localStorage.setItem('userModels', JSON.stringify(userModels));
 
+        // Обновляем открытые списки; пользовательский вид — если модель в текущем подпроекте.
+        refreshAfterModelChange();
+
         document.querySelector('.loading').textContent = 'Модель успешно загружена!';
-        setTimeout(() => {
-            document.querySelector('.loading').style.display = 'none';
-            loadModel();
-        }, 1000);
+        setTimeout(() => { document.querySelector('.loading').style.display = 'none'; }, 1000);
 
         return normalized;
     } catch (error) {
@@ -401,95 +462,117 @@ function setupFileUploadHandlers() {
 window.loadModel = loadModel;
 
 // Константы доменной модели
-const DEFAULT_PROJECT_ID = 'default';
-const DEFAULT_PROJECT_NAME = 'Без проекта';
-const LOCAL_PROJECT_ID = '__local__';
-const LOCAL_PROJECT_NAME = 'Локальные';
+const UNKNOWN_PROJECT_ID = 'unknown';
+const UNKNOWN_PROJECT_NAME = 'Unknown';
+const UNKNOWN_COMMON_ID = 'unknown-common';
+const COMMON_NAME = 'Common';
 
-// Переменные для пользовательских моделей и проектов
+// Переменные для проектов, подпроектов и моделей
 let userModels = [];
 let userProjects = [];
+let userSubprojects = [];
 
-// Функция для загрузки моделей из localStorage (резервный метод)
+// Текущий контекст пользовательского просмотра (по коду из URL)
+let currentSubproject = null;      // объект подпроекта, открытого по коду
+let currentSubprojectModels = [];  // его модели, отсортированы новые→старые
+
+// Функция для загрузки данных из localStorage (резервный метод)
 function loadModelsFromLocalStorage() {
     try {
-        const savedProjects = localStorage.getItem('userProjects');
-        if (savedProjects) {
-            userProjects = ensureDefaultProjectLocally(JSON.parse(savedProjects));
-        } else {
-            userProjects = ensureDefaultProjectLocally([]);
-        }
+        userProjects = ensureUnknownLocally(JSON.parse(localStorage.getItem('userProjects') || 'null'));
+        userSubprojects = ensureUnknownCommonLocally(JSON.parse(localStorage.getItem('userSubprojects') || 'null'));
         const savedModels = localStorage.getItem('userModels');
-        if (savedModels) {
-            userModels = JSON.parse(savedModels).map(normalizeModelEntry);
-            rebuildModelSelector();
-            console.log('Загружено моделей из localStorage:', userModels.length);
-        }
+        userModels = savedModels ? JSON.parse(savedModels).map(normalizeModelEntry) : [];
+        console.log('Загружено из localStorage моделей:', userModels.length);
     } catch (error) {
-        console.error('Ошибка при загрузке моделей из localStorage:', error);
+        console.error('Ошибка при загрузке из localStorage:', error);
     }
 }
 
-// Перерисовка селектора: упорядочиваем по проектам, формат "Проект — Имя".
-function rebuildModelSelector() {
+// Показывает заглушку «Модель не найдена!» и прячет управление моделью.
+function showModelNotFound() {
+    currentSubproject = null;
+    currentSubprojectModels = [];
+    const stub = document.getElementById('model-not-found');
+    if (stub) stub.style.display = 'flex';
+    ['model-selector', 'project-label', 'model-comment', 'share-model-btn'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+    const loading = document.querySelector('.loading');
+    if (loading) loading.style.display = 'none';
+}
+
+// Готовит пользовательский вид для подпроекта: лейбл, селектор версий, коммент.
+// Возвращает URL модели по умолчанию (самая свежая) или null, если моделей нет.
+function renderSubprojectView(subproject) {
+    currentSubproject = subproject;
+    const models = modelsOfSubproject(subproject.id);
+    currentSubprojectModels = models;
+
+    const stub = document.getElementById('model-not-found');
+    if (stub) stub.style.display = 'none';
+
+    // Статичный лейбл проекта/подпроекта
+    const label = document.getElementById('project-label');
+    if (label) {
+        label.textContent = computeProjectLabel(subproject);
+        label.style.display = label.textContent ? 'block' : 'none';
+    }
+
+    // Опции селектора = версии этого подпроекта (новые сверху)
     const modelSelect = document.getElementById('model-select');
-    if (!modelSelect) return;
-
-    // Сохраняем текущий выбор, чтобы вернуть его после перерисовки
-    const prevValue = modelSelect.value;
-
-    // Удаляем только пользовательские опции (статические — оставляем)
-    Array.from(modelSelect.options).forEach((opt) => {
-        if (opt.dataset.userModel === 'true' || opt.dataset.localModel === 'true') {
-            modelSelect.removeChild(opt);
-        }
-    });
-
-    // Сортируем: сначала по имени проекта, затем по displayName.
-    // Дефолтный проект и "Локальные" — в самом низу.
-    const sorted = [...userModels].sort((a, b) => {
-        const pa = getProjectName(a.projectId);
-        const pb = getProjectName(b.projectId);
-        const aDefault = a.projectId === DEFAULT_PROJECT_ID || a.projectId === LOCAL_PROJECT_ID;
-        const bDefault = b.projectId === DEFAULT_PROJECT_ID || b.projectId === LOCAL_PROJECT_ID;
-        if (aDefault !== bDefault) return aDefault ? 1 : -1;
-        const cmp = pa.localeCompare(pb, 'ru');
-        if (cmp !== 0) return cmp;
-        return (a.displayName || '').localeCompare(b.displayName || '', 'ru');
-    });
-
-    sorted.forEach((model) => modelSelect.appendChild(buildModelOption(model)));
-
-    // Возвращаем предыдущий выбор, если он ещё валиден
-    if (prevValue) {
-        const stillExists = Array.from(modelSelect.options).some((o) => o.value === prevValue);
-        if (stillExists) modelSelect.value = prevValue;
+    if (modelSelect) {
+        modelSelect.innerHTML = '';
+        models.forEach((m) => modelSelect.appendChild(buildVersionOption(m)));
+        modelSelect.selectedIndex = models.length ? 0 : -1;
+        // Сам выпадающий список нужен только при 2+ версиях
+        modelSelect.style.display = models.length >= 2 ? '' : 'none';
     }
+
+    // Карточка видна всегда, пока показан подпроект; скрываем только на «не найдено».
+    const selector = document.getElementById('model-selector');
+    if (selector) selector.style.display = 'flex';
+    const share = document.getElementById('share-model-btn');
+    if (share) share.style.display = '';
+
+    updateModelComment();
+
+    return models.length ? models[0].url : null;
 }
 
-function buildModelOption(model) {
+function buildVersionOption(model) {
     const opt = document.createElement('option');
     opt.value = model.url;
-    opt.text = formatModelLabel(model);
-    opt.dataset.userModel = model.projectId === LOCAL_PROJECT_ID ? 'false' : 'true';
-    opt.dataset.localModel = model.projectId === LOCAL_PROJECT_ID ? 'true' : 'false';
+    opt.text = formatVersionLabel(model);
     opt.dataset.format = model.format || '';
     opt.dataset.id = model.id || '';
-    opt.dataset.displayName = model.displayName || '';
-    opt.dataset.projectId = model.projectId || '';
+    opt.dataset.comment = model.comment || '';
     return opt;
 }
 
-// Старые имена сохраняем для обратной совместимости с остальным кодом
-function clearModelSelector() {
-    rebuildModelSelector();
+// Строка-подпись под селектором: комментарий выбранной версии (если есть).
+function updateModelComment() {
+    const el = document.getElementById('model-comment');
+    if (!el) return;
+    const modelSelect = document.getElementById('model-select');
+    let comment = '';
+    if (modelSelect && modelSelect.selectedIndex >= 0) {
+        const opt = modelSelect.options[modelSelect.selectedIndex];
+        comment = opt ? (opt.dataset.comment || '') : '';
+    }
+    el.textContent = comment;
+    el.style.display = comment ? 'block' : 'none';
 }
 
-function addModelToSelector(modelInfo, addToTop = false) {
-    // Старый API: вызываем когда модель добавили в userModels; просто перерисуем.
-    void addToTop;
-    rebuildModelSelector();
+// Совместимость со старым кодом: перерисовать пользовательский вид по текущему подпроекту.
+function rebuildModelSelector() {
+    if (!currentSubproject) return;
+    const sub = getSubproject(currentSubproject.id);
+    if (sub) renderSubprojectView(sub);
 }
+function clearModelSelector() { rebuildModelSelector(); }
+function addModelToSelector() { rebuildModelSelector(); }
 
 
 
@@ -1891,6 +1974,13 @@ async function loadModel() {
     // Захватываем идентичность этой загрузки: свой токен и путь на момент старта.
     const loadToken = ++currentLoadToken;
     const pathToLoad = currentModelPath;
+
+    // Пустой путь: сцена стартует без модели (модель покажет резолвер по коду).
+    if (!pathToLoad) {
+        const loading = document.querySelector('.loading');
+        if (loading) loading.style.display = 'none';
+        return null;
+    }
 
     // Определяем формат файла более безопасным способом
     let fileFormat = '';
@@ -3804,22 +3894,29 @@ const handleButtonTouch = function(event) {
 
 // Обработчики кнопки помощи перенесены в основной блок инициализации
 
-// ─── API-обёртки для проектов и обновления моделей ─────────────────────────
+// ─── API-обёртки ────────────────────────────────────────────────────────────
 
 async function apiCreateProject(name) {
-    const { project } = await apiRequest('/project-create', { method: 'POST', admin: true, body: { name } });
-    return project;
+    return apiRequest('/project-create', { method: 'POST', admin: true, body: { name } });
 }
-
 async function apiRenameProject(id, name) {
     const { project } = await apiRequest('/project-rename', { method: 'POST', admin: true, body: { id, name } });
     return project;
 }
-
 async function apiDeleteProject(id) {
     await apiRequest('/project-delete', { method: 'POST', admin: true, body: { id } });
 }
-
+async function apiCreateSubproject(projectId, name, code) {
+    const { subproject } = await apiRequest('/subproject-create', { method: 'POST', admin: true, body: { projectId, name, code } });
+    return subproject;
+}
+async function apiUpdateSubproject(id, patch) {
+    const { subproject } = await apiRequest('/subproject-update', { method: 'POST', admin: true, body: { id, ...patch } });
+    return subproject;
+}
+async function apiDeleteSubproject(id) {
+    await apiRequest('/subproject-delete', { method: 'POST', admin: true, body: { id } });
+}
 async function apiUpdateModel(id, patch) {
     const { model } = await apiRequest('/update', { method: 'POST', admin: true, body: { id, ...patch } });
     return model;
@@ -3839,106 +3936,6 @@ function setModalError(id, msg) {
     const el = document.getElementById(id);
     if (el) el.textContent = msg || '';
 }
-
-// ─── Диалог загрузки модели ────────────────────────────────────────────────
-
-// Открывает модалку загрузки, ждёт нажатия "Загрузить", запускает uploadModel.
-function openUploadDialog(file) {
-    return new Promise((resolve) => {
-        const overlay = document.getElementById('upload-modal');
-        const info = document.getElementById('upload-file-info');
-        const displayInput = document.getElementById('upload-display-name');
-        const newProjectInput = document.getElementById('upload-new-project-name');
-        const projectSelect = document.getElementById('upload-project-select');
-        const existingWrap = document.getElementById('upload-project-existing-wrap');
-        const newWrap = document.getElementById('upload-project-new-wrap');
-        const confirmBtn = document.getElementById('upload-confirm-btn');
-        const radios = overlay.querySelectorAll('input[name="upload-project-mode"]');
-
-        // Подставляем default displayName — имя файла без расширения
-        const defaultName = file.name.replace(/\.[^.]+$/, '');
-        info.textContent = `Файл: ${file.name} (${formatBytes(file.size)})`;
-        displayInput.value = defaultName;
-        newProjectInput.value = '';
-        setModalError('upload-error', '');
-
-        // Заполняем список существующих проектов (без локального)
-        projectSelect.innerHTML = '';
-        const projects = (userProjects || []).filter((p) => p && p.id !== LOCAL_PROJECT_ID);
-        projects.forEach((p) => {
-            const opt = document.createElement('option');
-            opt.value = p.id;
-            opt.text = p.name;
-            projectSelect.appendChild(opt);
-        });
-
-        // Если нет проектов кроме дефолтного — стартуем сразу на режиме "новый"
-        const onlyDefault = projects.length === 1 && projects[0].id === DEFAULT_PROJECT_ID;
-        const initialMode = onlyDefault ? 'new' : 'existing';
-        radios.forEach((r) => { r.checked = (r.value === initialMode); });
-        applyMode(initialMode);
-
-        function applyMode(mode) {
-            existingWrap.style.display = mode === 'existing' ? '' : 'none';
-            newWrap.style.display = mode === 'new' ? '' : 'none';
-        }
-        function modeListener(e) { applyMode(e.target.value); }
-        radios.forEach((r) => r.addEventListener('change', modeListener));
-
-        async function onConfirm() {
-            setModalError('upload-error', '');
-            const displayName = (displayInput.value || '').trim();
-            if (!displayName) {
-                setModalError('upload-error', 'Введите название модели');
-                return;
-            }
-            const mode = overlay.querySelector('input[name="upload-project-mode"]:checked').value;
-            let projectId = '';
-            let newProjectName = '';
-            if (mode === 'existing') {
-                projectId = projectSelect.value;
-                if (!projectId) {
-                    setModalError('upload-error', 'Выберите проект');
-                    return;
-                }
-            } else {
-                newProjectName = (newProjectInput.value || '').trim();
-                if (!newProjectName) {
-                    setModalError('upload-error', 'Введите название нового проекта');
-                    return;
-                }
-            }
-
-            confirmBtn.disabled = true;
-            try {
-                await uploadModel(file, { displayName, projectId, newProjectName });
-                cleanup();
-                resolve(true);
-            } catch (e) {
-                setModalError('upload-error', e.message || 'Ошибка загрузки');
-                confirmBtn.disabled = false;
-            }
-        }
-        function onCancel() {
-            cleanup();
-            resolve(false);
-        }
-        function cleanup() {
-            confirmBtn.removeEventListener('click', onConfirm);
-            radios.forEach((r) => r.removeEventListener('change', modeListener));
-            overlay.querySelectorAll('[data-modal-close="upload-modal"]').forEach((b) => b.removeEventListener('click', onCancel));
-            closeModal('upload-modal');
-            confirmBtn.disabled = false;
-        }
-
-        confirmBtn.addEventListener('click', onConfirm);
-        overlay.querySelectorAll('[data-modal-close="upload-modal"]').forEach((b) => b.addEventListener('click', onCancel));
-        openModal('upload-modal');
-        // Автофокус на поле имени
-        setTimeout(() => displayInput.focus(), 50);
-    });
-}
-
 function formatBytes(bytes) {
     if (!bytes || isNaN(bytes)) return '—';
     const units = ['Б', 'КБ', 'МБ', 'ГБ'];
@@ -3946,6 +3943,154 @@ function formatBytes(bytes) {
     let n = bytes;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+// Заполняет <select> проектами. Возвращает выбранный id.
+function fillProjectSelect(select, selectedId) {
+    if (!select) return '';
+    select.innerHTML = '';
+    const projects = [...(userProjects || [])].sort(projectSort);
+    projects.forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.text = p.name;
+        select.appendChild(opt);
+    });
+    if (selectedId && projects.some((p) => p.id === selectedId)) select.value = selectedId;
+    return select.value;
+}
+// Заполняет <select> подпроектами выбранного проекта (Common сверху с пометкой).
+function fillSubprojectSelect(select, projectId, selectedId) {
+    if (!select) return '';
+    select.innerHTML = '';
+    const subs = (userSubprojects || [])
+        .filter((s) => s.projectId === projectId)
+        .sort(subprojectSort);
+    subs.forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.text = s.isCommon ? `${s.name} (общий)` : `${s.name} · ${s.code}`;
+        select.appendChild(opt);
+    });
+    if (selectedId && subs.some((s) => s.id === selectedId)) select.value = selectedId;
+    return select.value;
+}
+// Сортировки: Unknown/Common — в конце, остальное по алфавиту.
+function projectSort(a, b) {
+    const au = a.id === UNKNOWN_PROJECT_ID, bu = b.id === UNKNOWN_PROJECT_ID;
+    if (au !== bu) return au ? 1 : -1;
+    return (a.name || '').localeCompare(b.name || '', 'ru');
+}
+function subprojectSort(a, b) {
+    if (!!a.isCommon !== !!b.isCommon) return a.isCommon ? -1 : 1; // Common первым
+    return (a.name || '').localeCompare(b.name || '', 'ru');
+}
+
+// ─── Единая модалка модели (загрузка / редактирование) ──────────────────────
+
+// mode: 'upload' (нужен file) или 'edit' (нужен model). Возвращает Promise<boolean>.
+function openModelForm({ mode, file = null, model = null }) {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('model-form-modal');
+        const title = document.getElementById('model-form-title');
+        const fileInfo = document.getElementById('model-form-file-info');
+        const projectSel = document.getElementById('model-form-project');
+        const subSel = document.getElementById('model-form-subproject');
+        const displayInput = document.getElementById('model-form-display');
+        const versionInput = document.getElementById('model-form-version');
+        const dateInput = document.getElementById('model-form-date');
+        const commentInput = document.getElementById('model-form-comment');
+        const confirmBtn = document.getElementById('model-form-confirm');
+
+        setModalError('model-form-error', '');
+        title.textContent = mode === 'upload' ? 'Загрузка модели' : 'Редактирование модели';
+
+        // Стартовые значения
+        let startProjectId, startSubId, startDisplay, startVersion, startDate, startComment;
+        if (mode === 'edit' && model) {
+            startSubId = model.subprojectId;
+            const sub = getSubproject(startSubId);
+            startProjectId = sub ? sub.projectId : UNKNOWN_PROJECT_ID;
+            startDisplay = model.displayName || model.name || '';
+            startVersion = model.versionName || '';
+            startDate = normalizeDateStr(model.modelDate, model.uploadedAt);
+            startComment = model.comment || '';
+            fileInfo.style.display = 'none';
+        } else {
+            // upload: подставим текущий подпроект (если открыт) как удобный дефолт
+            startSubId = currentSubproject ? currentSubproject.id : UNKNOWN_COMMON_ID;
+            const sub = getSubproject(startSubId);
+            startProjectId = sub ? sub.projectId : UNKNOWN_PROJECT_ID;
+            startDisplay = file ? file.name.replace(/\.[^.]+$/, '') : '';
+            startVersion = '';
+            startDate = new Date().toISOString().slice(0, 10);
+            startComment = '';
+            fileInfo.style.display = 'block';
+            fileInfo.textContent = file ? `Файл: ${file.name} (${formatBytes(file.size)})` : '';
+        }
+
+        fillProjectSelect(projectSel, startProjectId);
+        fillSubprojectSelect(subSel, projectSel.value, startSubId);
+        displayInput.value = startDisplay;
+        versionInput.value = startVersion;
+        dateInput.value = startDate;
+        commentInput.value = startComment;
+
+        function onProjectChange() { fillSubprojectSelect(subSel, projectSel.value, null); }
+        projectSel.addEventListener('change', onProjectChange);
+
+        async function onConfirm() {
+            setModalError('model-form-error', '');
+            const displayName = (displayInput.value || '').trim();
+            const subprojectId = subSel.value;
+            const versionName = (versionInput.value || '').trim();
+            const modelDate = (dateInput.value || '').trim() || new Date().toISOString().slice(0, 10);
+            const comment = (commentInput.value || '').trim();
+            if (!displayName) { setModalError('model-form-error', 'Введите название модели'); return; }
+            if (!subprojectId) { setModalError('model-form-error', 'Выберите подпроект'); return; }
+
+            confirmBtn.disabled = true;
+            try {
+                if (mode === 'upload') {
+                    await uploadModel(file, { displayName, subprojectId, versionName, modelDate, comment });
+                } else {
+                    const updated = await apiUpdateModel(model.id, { displayName, subprojectId, versionName, modelDate, comment });
+                    replaceModelInState(updated);
+                    refreshAfterModelChange();
+                }
+                cleanup();
+                resolve(true);
+            } catch (e) {
+                setModalError('model-form-error', e.message || 'Ошибка');
+                confirmBtn.disabled = false;
+            }
+        }
+        function onCancel() { cleanup(); resolve(false); }
+        function cleanup() {
+            confirmBtn.removeEventListener('click', onConfirm);
+            projectSel.removeEventListener('change', onProjectChange);
+            overlay.querySelectorAll('[data-modal-close="model-form-modal"]').forEach((b) => b.removeEventListener('click', onCancel));
+            closeModal('model-form-modal');
+            confirmBtn.disabled = false;
+        }
+
+        confirmBtn.addEventListener('click', onConfirm);
+        overlay.querySelectorAll('[data-modal-close="model-form-modal"]').forEach((b) => b.addEventListener('click', onCancel));
+        openModal('model-form-modal');
+        setTimeout(() => displayInput.focus(), 50);
+    });
+}
+
+// Совместимость: старый вход в диалог загрузки.
+function openUploadDialog(file) { return openModelForm({ mode: 'upload', file }); }
+
+// После изменения модели: обновить админ-списки и пользовательский вид.
+function refreshAfterModelChange() {
+    if (document.getElementById('admin-modal')?.classList.contains('visible')) {
+        renderAdminModels();
+        renderAdminCatalog();
+    }
+    rebuildModelSelector();
 }
 
 // ─── Админ-панель ──────────────────────────────────────────────────────────
@@ -3965,32 +4110,48 @@ function setupAdminButton() {
 }
 
 async function openAdminPanel() {
+    // Требуем токен: без него сразу спрашиваем пароль.
+    if (!getAdminToken()) return;
+
     setModalError('admin-error', '');
-    // Освежаем данные из бакета, чтобы видеть актуальное состояние
+    // Освежаем данные из бакета
     try {
-        const [projectsData, modelsData] = await Promise.all([fetchProjectsRaw(), fetchModelsRaw()]);
-        userProjects = ensureDefaultProjectLocally(projectsData);
-        // Сохраняем локальные модели — они есть только на клиенте
-        const localOnly = userModels.filter((m) => m.projectId === LOCAL_PROJECT_ID);
-        userModels = [...localOnly, ...modelsData.map(normalizeModelEntry)];
-        localStorage.setItem('userModels', JSON.stringify(userModels.filter((m) => m.projectId !== LOCAL_PROJECT_ID)));
+        const [projectsData, subprojectsData, modelsData] = await Promise.all([
+            fetchProjectsRaw(), fetchSubprojectsRaw(), fetchModelsRaw(),
+        ]);
+        userProjects = ensureUnknownLocally(projectsData);
+        userSubprojects = ensureUnknownCommonLocally(subprojectsData);
+        userModels = modelsData.map(normalizeModelEntry);
+        localStorage.setItem('userModels', JSON.stringify(userModels));
         localStorage.setItem('userProjects', JSON.stringify(userProjects));
+        localStorage.setItem('userSubprojects', JSON.stringify(userSubprojects));
     } catch (e) {
         console.warn('Не удалось обновить данные перед открытием админки:', e);
     }
 
-    renderAdminModels();
-    renderAdminProjects();
     setupAdminTabs();
-    setupAdminCreateProject();
     setupAdminCloseHandlers();
+    setupAdminUploadButton();
+    setupAdminModelSearch();
+    setupAdminCreateProject();
+    renderAdminModels();
+    renderAdminCatalog();
     openModal('admin-modal');
+    updateAdminButtonVisibility();
+}
+
+function rebindClick(id, handler) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const clone = el.cloneNode(true);
+    el.parentNode.replaceChild(clone, el);
+    const fresh = document.getElementById(id);
+    fresh.addEventListener('click', handler);
+    return fresh;
 }
 
 function setupAdminTabs() {
-    const tabs = document.querySelectorAll('.admin-tab');
-    tabs.forEach((tab) => {
-        // Чтобы не плодить обработчики при повторном открытии — клонируем
+    document.querySelectorAll('.admin-tab').forEach((tab) => {
         const clone = tab.cloneNode(true);
         tab.parentNode.replaceChild(clone, tab);
     });
@@ -4000,14 +4161,13 @@ function setupAdminTabs() {
             tab.classList.add('active');
             const which = tab.dataset.adminTab;
             document.getElementById('admin-tab-models').style.display = which === 'models' ? '' : 'none';
-            document.getElementById('admin-tab-projects').style.display = which === 'projects' ? '' : 'none';
+            document.getElementById('admin-tab-catalog').style.display = which === 'catalog' ? '' : 'none';
         });
     });
 }
 
 function setupAdminCloseHandlers() {
     document.querySelectorAll('[data-modal-close="admin-modal"]').forEach((btn) => {
-        // Перебиндиваем обработчик
         const clone = btn.cloneNode(true);
         btn.parentNode.replaceChild(clone, btn);
     });
@@ -4016,49 +4176,173 @@ function setupAdminCloseHandlers() {
     });
 }
 
+function setupAdminUploadButton() {
+    const btn = rebindClick('admin-upload-btn', () => {
+        const input = document.getElementById('admin-file-input');
+        if (input) input.click();
+    });
+    const input = document.getElementById('admin-file-input');
+    if (input) {
+        const clone = input.cloneNode(true);
+        input.parentNode.replaceChild(clone, input);
+        document.getElementById('admin-file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            e.target.value = '';
+            if (!file) return;
+            const format = file.name.split('.').pop().toLowerCase();
+            if (format !== 'glb' && format !== 'gltf') {
+                setModalError('admin-error', 'Поддерживаются только GLB и GLTF');
+                return;
+            }
+            await openModelForm({ mode: 'upload', file });
+        });
+    }
+    void btn;
+}
+
+let adminModelQuery = '';
+function setupAdminModelSearch() {
+    const input = document.getElementById('admin-model-search');
+    if (!input) return;
+    const clone = input.cloneNode(true);
+    input.parentNode.replaceChild(clone, input);
+    const fresh = document.getElementById('admin-model-search');
+    fresh.value = adminModelQuery;
+    fresh.addEventListener('input', () => { adminModelQuery = fresh.value; renderAdminModels(); });
+}
+
+// Плоский список моделей, сгруппированный по проекту→подпроекту, с поиском.
+function renderAdminModels() {
+    const container = document.getElementById('admin-models');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const q = (adminModelQuery || '').trim().toLowerCase();
+    const models = [...(userModels || [])].sort((a, b) => {
+        const sa = getSubproject(a.subprojectId), sb = getSubproject(b.subprojectId);
+        const pa = sa ? getProjectName(sa.projectId) : '', pb = sb ? getProjectName(sb.projectId) : '';
+        const cmp = pa.localeCompare(pb, 'ru');
+        if (cmp !== 0) return cmp;
+        const sn = (sa ? sa.name : '').localeCompare(sb ? sb.name : '', 'ru');
+        if (sn !== 0) return sn;
+        return String(b.modelDate).localeCompare(String(a.modelDate));
+    });
+
+    let shown = 0;
+    let lastGroupKey = '';
+    models.forEach((m) => {
+        const sub = getSubproject(m.subprojectId);
+        const proj = sub ? getProject(sub.projectId) : null;
+        const projName = proj ? proj.name : UNKNOWN_PROJECT_NAME;
+        const subName = sub ? sub.name : '—';
+        const code = sub ? (sub.code || '') : '';
+        if (q) {
+            const hay = `${projName} ${subName} ${code} ${m.displayName} ${m.versionName || ''}`.toLowerCase();
+            if (!hay.includes(q)) return;
+        }
+        shown += 1;
+
+        // Заголовок группы (проект — подпроект · код)
+        const groupKey = `${projName}|${subName}|${code}`;
+        if (groupKey !== lastGroupKey) {
+            lastGroupKey = groupKey;
+            const header = document.createElement('div');
+            header.className = 'admin-group';
+            header.textContent = sub && sub.isCommon
+                ? `${projName} — ${subName}`
+                : `${projName} — ${subName}${code ? ` · ${code}` : ''}`;
+            container.appendChild(header);
+        }
+
+        const row = document.createElement('div');
+        row.className = 'admin-row';
+        const main = document.createElement('div');
+        main.className = 'row-main';
+        main.title = `Файл: ${m.name}`;
+        const ver = (m.versionName || '').trim();
+        main.textContent = `${formatDateRu(m.modelDate)}${ver ? ` — ${ver}` : ''} · ${m.displayName || m.name}`;
+        row.appendChild(main);
+
+        const actions = document.createElement('div');
+        actions.className = 'row-actions';
+
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Изменить';
+        editBtn.addEventListener('click', async () => {
+            await openModelForm({ mode: 'edit', model: m });
+        });
+        actions.appendChild(editBtn);
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Удалить';
+        delBtn.className = 'danger';
+        delBtn.addEventListener('click', async () => {
+            if (!window.confirm(`Удалить модель "${m.displayName || m.name}" (${formatDateRu(m.modelDate)})?`)) return;
+            try {
+                const ok = await deleteModel(m.id);
+                if (ok !== false) { setModalError('admin-error', ''); renderAdminModels(); renderAdminCatalog(); }
+            } catch (e) { setModalError('admin-error', e.message); }
+        });
+        actions.appendChild(delBtn);
+
+        row.appendChild(actions);
+        container.appendChild(row);
+    });
+
+    if (!shown) {
+        const empty = document.createElement('div');
+        empty.className = 'admin-row';
+        empty.style.color = '#888';
+        empty.textContent = q ? 'Ничего не найдено' : 'Моделей пока нет';
+        container.appendChild(empty);
+    }
+}
+
 function setupAdminCreateProject() {
-    const btn = document.getElementById('admin-create-project-btn');
-    const input = document.getElementById('admin-new-project-name');
-    if (!btn || !input) return;
-    const clone = btn.cloneNode(true);
-    btn.parentNode.replaceChild(clone, btn);
-    document.getElementById('admin-create-project-btn').addEventListener('click', async () => {
+    rebindClick('admin-create-project-btn', async () => {
+        const input = document.getElementById('admin-new-project-name');
         const name = (input.value || '').trim();
         if (!name) { setModalError('admin-error', 'Введите название проекта'); return; }
         try {
-            const project = await apiCreateProject(name);
-            userProjects.push(project);
+            const { project } = await apiCreateProject(name);
+            // Проект и его Common подтянем свежими из бакета
+            userSubprojects = ensureUnknownCommonLocally(await fetchSubprojectsRaw());
+            if (project && !userProjects.some((p) => p.id === project.id)) userProjects.push(project);
             localStorage.setItem('userProjects', JSON.stringify(userProjects));
+            localStorage.setItem('userSubprojects', JSON.stringify(userSubprojects));
             input.value = '';
             setModalError('admin-error', '');
-            renderAdminProjects();
-            rebuildModelSelector();
+            renderAdminCatalog();
         } catch (e) {
             setModalError('admin-error', e.message);
         }
     });
 }
 
-function renderAdminProjects() {
+// Каталог: проекты с вложенными подпроектами (коды, действия).
+function renderAdminCatalog() {
     const container = document.getElementById('admin-projects');
     if (!container) return;
     container.innerHTML = '';
-    const projects = (userProjects || []).filter((p) => p && p.id !== LOCAL_PROJECT_ID);
-    projects.forEach((p) => {
-        const row = document.createElement('div');
-        row.className = 'admin-row';
 
+    const projects = [...(userProjects || [])].sort(projectSort);
+    projects.forEach((p) => {
+        const block = document.createElement('div');
+        block.className = 'admin-project-block';
+
+        const head = document.createElement('div');
+        head.className = 'admin-row';
         const main = document.createElement('div');
         main.className = 'row-main';
+        main.style.fontWeight = '600';
         main.textContent = p.name;
-        row.appendChild(main);
+        head.appendChild(main);
 
         const actions = document.createElement('div');
         actions.className = 'row-actions';
-
-        if (p.id !== DEFAULT_PROJECT_ID) {
+        if (p.id !== UNKNOWN_PROJECT_ID) {
             const renameBtn = document.createElement('button');
-            renameBtn.textContent = 'Переименовать';
+            renameBtn.textContent = 'Имя';
             renameBtn.addEventListener('click', async () => {
                 const next = window.prompt('Новое название проекта:', p.name);
                 if (!next || next.trim() === p.name) return;
@@ -4067,142 +4351,109 @@ function renderAdminProjects() {
                     const idx = userProjects.findIndex((x) => x.id === p.id);
                     if (idx >= 0) userProjects[idx] = updated;
                     localStorage.setItem('userProjects', JSON.stringify(userProjects));
-                    setModalError('admin-error', '');
-                    renderAdminProjects();
-                    renderAdminModels();
-                    rebuildModelSelector();
-                } catch (e) {
-                    setModalError('admin-error', e.message);
-                }
+                    setModalError('admin-error', ''); renderAdminCatalog(); renderAdminModels(); rebuildModelSelector();
+                } catch (e) { setModalError('admin-error', e.message); }
             });
             actions.appendChild(renameBtn);
 
-            const deleteBtn = document.createElement('button');
-            deleteBtn.textContent = 'Удалить';
-            deleteBtn.className = 'danger';
-            deleteBtn.addEventListener('click', async () => {
-                if (!window.confirm(`Удалить проект "${p.name}"?`)) return;
+            const delBtn = document.createElement('button');
+            delBtn.textContent = 'Удалить';
+            delBtn.className = 'danger';
+            delBtn.addEventListener('click', async () => {
+                if (!window.confirm(`Удалить проект "${p.name}" со всеми подпроектами?`)) return;
                 try {
                     await apiDeleteProject(p.id);
                     userProjects = userProjects.filter((x) => x.id !== p.id);
+                    userSubprojects = userSubprojects.filter((s) => s.projectId !== p.id);
                     localStorage.setItem('userProjects', JSON.stringify(userProjects));
-                    setModalError('admin-error', '');
-                    renderAdminProjects();
-                } catch (e) {
-                    setModalError('admin-error', e.message);
-                }
+                    localStorage.setItem('userSubprojects', JSON.stringify(userSubprojects));
+                    setModalError('admin-error', ''); renderAdminCatalog();
+                } catch (e) { setModalError('admin-error', e.message); }
             });
-            actions.appendChild(deleteBtn);
+            actions.appendChild(delBtn);
         }
+        head.appendChild(actions);
+        block.appendChild(head);
 
-        row.appendChild(actions);
-        container.appendChild(row);
+        // Подпроекты
+        const subs = (userSubprojects || []).filter((s) => s.projectId === p.id).sort(subprojectSort);
+        subs.forEach((s) => {
+            const row = document.createElement('div');
+            row.className = 'admin-row admin-subrow';
+            const sm = document.createElement('div');
+            sm.className = 'row-main';
+            const count = modelsOfSubproject(s.id).length;
+            sm.textContent = s.isCommon
+                ? `${s.name} (общий) · ${count} мод.`
+                : `${s.name} · ${s.code} · ${count} мод.`;
+            row.appendChild(sm);
+
+            const sa = document.createElement('div');
+            sa.className = 'row-actions';
+            if (!s.isCommon) {
+                const editBtn = document.createElement('button');
+                editBtn.textContent = 'Изм.';
+                editBtn.title = 'Изменить имя/код';
+                editBtn.addEventListener('click', async () => {
+                    const name = window.prompt('Название подпроекта:', s.name);
+                    if (name === null) return;
+                    const code = window.prompt('Код подпроекта:', s.code);
+                    if (code === null) return;
+                    try {
+                        const updated = await apiUpdateSubproject(s.id, { name: name.trim(), code: code.trim() });
+                        const idx = userSubprojects.findIndex((x) => x.id === s.id);
+                        if (idx >= 0) userSubprojects[idx] = updated;
+                        localStorage.setItem('userSubprojects', JSON.stringify(userSubprojects));
+                        setModalError('admin-error', ''); renderAdminCatalog(); renderAdminModels(); rebuildModelSelector();
+                    } catch (e) { setModalError('admin-error', e.message); }
+                });
+                sa.appendChild(editBtn);
+
+                const delBtn = document.createElement('button');
+                delBtn.textContent = 'Удл.';
+                delBtn.className = 'danger';
+                delBtn.addEventListener('click', async () => {
+                    if (!window.confirm(`Удалить подпроект "${s.name}" (${s.code})?`)) return;
+                    try {
+                        await apiDeleteSubproject(s.id);
+                        userSubprojects = userSubprojects.filter((x) => x.id !== s.id);
+                        localStorage.setItem('userSubprojects', JSON.stringify(userSubprojects));
+                        setModalError('admin-error', ''); renderAdminCatalog();
+                    } catch (e) { setModalError('admin-error', e.message); }
+                });
+                sa.appendChild(delBtn);
+            }
+            row.appendChild(sa);
+            block.appendChild(row);
+        });
+
+        // Добавление подпроекта
+        const addRow = document.createElement('div');
+        addRow.className = 'admin-row admin-subrow admin-add-sub';
+        const nameIn = document.createElement('input');
+        nameIn.type = 'text'; nameIn.placeholder = 'Новый подпроект'; nameIn.className = 'admin-input';
+        const codeIn = document.createElement('input');
+        codeIn.type = 'text'; codeIn.placeholder = 'Код'; codeIn.className = 'admin-input admin-input-code';
+        const addBtn = document.createElement('button');
+        addBtn.textContent = 'Добавить';
+        addBtn.addEventListener('click', async () => {
+            const name = (nameIn.value || '').trim();
+            const code = (codeIn.value || '').trim();
+            if (!name || !code) { setModalError('admin-error', 'Укажите название и код подпроекта'); return; }
+            try {
+                const sub = await apiCreateSubproject(p.id, name, code);
+                userSubprojects.push(sub);
+                localStorage.setItem('userSubprojects', JSON.stringify(userSubprojects));
+                setModalError('admin-error', ''); renderAdminCatalog();
+            } catch (e) { setModalError('admin-error', e.message); }
+        });
+        addRow.appendChild(nameIn);
+        addRow.appendChild(codeIn);
+        addRow.appendChild(addBtn);
+        block.appendChild(addRow);
+
+        container.appendChild(block);
     });
-
-    if (!projects.length) {
-        const empty = document.createElement('div');
-        empty.className = 'admin-row';
-        empty.style.color = '#888';
-        empty.textContent = 'Проектов пока нет';
-        container.appendChild(empty);
-    }
-}
-
-function renderAdminModels() {
-    const container = document.getElementById('admin-models');
-    if (!container) return;
-    container.innerHTML = '';
-    const cloud = (userModels || []).filter((m) => m && m.projectId !== LOCAL_PROJECT_ID);
-
-    if (!cloud.length) {
-        const empty = document.createElement('div');
-        empty.className = 'admin-row';
-        empty.style.color = '#888';
-        empty.textContent = 'Моделей пока нет';
-        container.appendChild(empty);
-        return;
-    }
-
-    cloud.forEach((m) => {
-        const row = document.createElement('div');
-        row.className = 'admin-row';
-
-        const main = document.createElement('div');
-        main.className = 'row-main';
-        main.title = `Файл: ${m.name}`;
-        main.textContent = `${getProjectName(m.projectId)} — ${m.displayName || m.name}`;
-        row.appendChild(main);
-
-        const actions = document.createElement('div');
-        actions.className = 'row-actions';
-
-        const renameBtn = document.createElement('button');
-        renameBtn.textContent = 'Имя';
-        renameBtn.title = 'Переименовать';
-        renameBtn.addEventListener('click', async () => {
-            const next = window.prompt('Новое название модели:', m.displayName || m.name);
-            if (!next || next.trim() === (m.displayName || m.name)) return;
-            try {
-                const updated = await apiUpdateModel(m.id, { displayName: next.trim() });
-                replaceModelInState(updated);
-                setModalError('admin-error', '');
-                renderAdminModels();
-                rebuildModelSelector();
-            } catch (e) {
-                setModalError('admin-error', e.message);
-            }
-        });
-        actions.appendChild(renameBtn);
-
-        const moveBtn = document.createElement('button');
-        moveBtn.textContent = 'Проект';
-        moveBtn.title = 'Сменить проект';
-        moveBtn.addEventListener('click', async () => {
-            const target = pickProjectViaPrompt(m.projectId);
-            if (!target || target === m.projectId) return;
-            try {
-                const updated = await apiUpdateModel(m.id, { projectId: target });
-                replaceModelInState(updated);
-                setModalError('admin-error', '');
-                renderAdminModels();
-                rebuildModelSelector();
-            } catch (e) {
-                setModalError('admin-error', e.message);
-            }
-        });
-        actions.appendChild(moveBtn);
-
-        const delBtn = document.createElement('button');
-        delBtn.textContent = 'Удалить';
-        delBtn.className = 'danger';
-        delBtn.addEventListener('click', async () => {
-            if (!window.confirm(`Удалить модель "${m.displayName || m.name}"?`)) return;
-            try {
-                const ok = await deleteModel(m.id);
-                if (ok !== false) {
-                    setModalError('admin-error', '');
-                    renderAdminModels();
-                }
-            } catch (e) {
-                setModalError('admin-error', e.message);
-            }
-        });
-        actions.appendChild(delBtn);
-
-        row.appendChild(actions);
-        container.appendChild(row);
-    });
-}
-
-// Простой prompt-выбор проекта по номеру (без отдельного UI)
-function pickProjectViaPrompt(currentId) {
-    const projects = (userProjects || []).filter((p) => p && p.id !== LOCAL_PROJECT_ID);
-    const lines = projects.map((p, i) => `${i + 1}. ${p.name}${p.id === currentId ? ' (текущий)' : ''}`);
-    const answer = window.prompt(`Выберите номер проекта:\n${lines.join('\n')}`, '');
-    if (!answer) return null;
-    const idx = parseInt(answer, 10) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= projects.length) return null;
-    return projects[idx].id;
 }
 
 function replaceModelInState(updated) {
@@ -4211,18 +4462,14 @@ function replaceModelInState(updated) {
     const idx = userModels.findIndex((m) => m.id === norm.id);
     if (idx >= 0) userModels[idx] = { ...userModels[idx], ...norm };
     else userModels.unshift(norm);
-    localStorage.setItem('userModels', JSON.stringify(userModels.filter((m) => m.projectId !== LOCAL_PROJECT_ID)));
+    localStorage.setItem('userModels', JSON.stringify(userModels));
 }
 
 // Удаление модели из Object Storage через Cloud Function
 async function deleteModel(modelId) {
     try {
-        if (!storageConfigured && !initStorage()) {
-            throw new Error('Хранилище не настроено');
-        }
-        if (!modelId) {
-            throw new Error('ID модели не указан');
-        }
+        if (!storageConfigured && !initStorage()) throw new Error('Хранилище не настроено');
+        if (!modelId) throw new Error('ID модели не указан');
 
         document.querySelector('.loading').textContent = 'Удаление модели...';
         document.querySelector('.loading').style.display = 'block';
@@ -4231,31 +4478,22 @@ async function deleteModel(modelId) {
 
         const removed = userModels.find((m) => m.id === modelId);
         userModels = userModels.filter((m) => m.id !== modelId);
-        localStorage.setItem('userModels', JSON.stringify(userModels.filter((m) => m.projectId !== LOCAL_PROJECT_ID)));
+        localStorage.setItem('userModels', JSON.stringify(userModels));
 
-        rebuildModelSelector();
-        const modelSelect = document.getElementById('model-select');
-        if (modelSelect && modelSelect.options.length > 0) {
-            const wasCurrent = removed && removed.url === currentModelPath;
-            if (wasCurrent) {
-                modelSelect.selectedIndex = 0;
-                currentModelPath = modelSelect.value;
-                loadModel();
-            }
+        // Если удалили модель из текущего пользовательского вида — перерисуем его.
+        if (currentSubproject && removed && removed.subprojectId === currentSubproject.id) {
+            const urlToLoad = renderSubprojectView(getSubproject(currentSubproject.id));
+            if (urlToLoad && urlToLoad !== currentModelPath) { currentModelPath = urlToLoad; loadModel(); }
+            else if (!urlToLoad) showModelNotFound();
         }
 
         document.querySelector('.loading').textContent = 'Модель успешно удалена';
-        setTimeout(() => {
-            document.querySelector('.loading').style.display = 'none';
-        }, 1500);
-
+        setTimeout(() => { document.querySelector('.loading').style.display = 'none'; }, 1500);
         return true;
     } catch (error) {
         console.error('Ошибка при удалении модели:', error);
         document.querySelector('.loading').textContent = `Ошибка удаления: ${error.message}`;
-        setTimeout(() => {
-            document.querySelector('.loading').style.display = 'none';
-        }, 3000);
+        setTimeout(() => { document.querySelector('.loading').style.display = 'none'; }, 3000);
         return false;
     }
 }
@@ -4538,7 +4776,27 @@ document.addEventListener('keydown', function(e) {
         console.log('Нажата русская клавиша А, входим в полноэкранный режим');
         enterFullscreenMode();
     }
+
+    // Клавиша U (и русская Г на той же клавише) — переключение режима админа.
+    // Только десктоп; не срабатывает при вводе в поля.
+    if (e.key === 'u' || e.key === 'U' || e.key === 'г' || e.key === 'Г') {
+        const tag = (e.target && e.target.tagName) || '';
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
+        if (window.matchMedia('(max-width: 768px)').matches) return; // мобилка — пропускаем
+        e.preventDefault();
+        toggleAdminMode();
+    }
 });
+
+// Переключает пользовательский/админский режим. Без токена сразу спрашивает пароль.
+function toggleAdminMode() {
+    const modal = document.getElementById('admin-modal');
+    if (modal && modal.classList.contains('visible')) {
+        closeModal('admin-modal');
+    } else {
+        openAdminPanel();
+    }
+}
 
 // Вызываем проверку видимости кнопки загрузки модели
 checkAndHideUploadButton();
@@ -4686,49 +4944,28 @@ document.addEventListener('DOMContentLoaded', async function() {
         checkAndHideUploadButton();
     });
     
-    // Добавляем обработчик изменения выбранной модели
+    // Обработчик смены версии в селекторе: код (URL) не меняется, обновляем
+    // только комментарий и подгружаем выбранную версию.
     const modelSelect = document.getElementById('model-select');
     if (modelSelect) {
         modelSelect.addEventListener('change', () => {
-            const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-            const modelName = selectedOption.dataset.displayName || selectedOption.textContent;
-
-            console.log('Выбрана модель:', modelName);
-
-            // Обновляем URL с параметром выбранной модели
-            updateUrlWithModel(modelName);
-
-            // Загружаем выбранную модель
+            updateModelComment();
             loadSelectedModel();
         });
     }
-    
-    // Инициализация 3D сцены
-    if (modelSelect && modelSelect.options.length > 0) {
-        // Сначала инициализируем 3D движок
-        currentModelPath = modelSelect.options[0].value;
-        init();
-        animate();
-        
-        // Затем проверяем, есть ли параметр модели в URL
-        setTimeout(() => {
-            loadModelFromUrlParam().then(urlModelLoaded => {
-                if (!urlModelLoaded) {
-                    // Если модель не была загружена по URL, обновляем URL для первой модели
-                    const firstOpt = modelSelect.options[0];
-                    const firstModelName = firstOpt.dataset.displayName || firstOpt.textContent;
-                    updateUrlWithModel(firstModelName);
-                }
-            }).catch(error => {
-                console.error('Ошибка при загрузке модели по URL:', error);
-            });
-        }, 500); // Даем время на инициализацию сцены
-    } else {
-        console.error('Не удалось найти список моделей или список пуст');
-        currentModelPath = 'https://ucarecdn.com/ef29366f-638f-4131-8b83-78ee40120967/';
-        init();
-        animate();
-    }
+
+    // Инициализация 3D сцены (пустой) и резолв по коду из URL.
+    // Сцена всегда стартует пустой; конкретную модель грузит резолвер по коду.
+    currentModelPath = '';
+    init();
+    animate();
+
+    setTimeout(() => {
+        loadModelFromUrlParam().catch((error) => {
+            console.error('Ошибка при загрузке модели по коду:', error);
+            showModelNotFound();
+        });
+    }, 300);
 
     // Отложенная инициализация режимов отображения
     setTimeout(() => {
@@ -4786,78 +5023,11 @@ function checkModelDuplicate(fileName) {
 
 
 
-// Функция для локальной загрузки модели (если Supabase недоступен)
+// УСТАРЕВШЕЕ: локальная загрузка своей модели отключена (модели идут только
+// через админку в облако и привязываются к подпроектам). Оставлено как no-op.
 function loadLocalModel(file) {
-    try {
-        console.log('Начинаем локальную загрузку модели:', file.name);
-        
-        // Правильное определение формата файла
-        let format = '';
-        const fileNameParts = file.name.split('.');
-        
-        // Проверяем, что есть хотя бы одна точка в имени файла
-        if (fileNameParts.length > 1) {
-            format = fileNameParts.pop().toLowerCase();
-        }
-        
-        console.log('Определен формат файла:', format);
-        
-        // Проверяем, что формат поддерживается
-        if (format !== 'glb' && format !== 'gltf') {
-            throw new Error(`Формат ${format || 'неизвестный'} не поддерживается. Используйте только GLB или GLTF.`);
-        }
-        
-        // Создаем локальный URL для файла
-        const objectUrl = URL.createObjectURL(file);
-        
-        document.querySelector('.loading').textContent = 'Локальная загрузка модели...';
-        document.querySelector('.loading').style.display = 'block';
-        
-        // Обновляем отображаемое имя файла
-        const fileNameElement = document.getElementById('file-name');
-        if (fileNameElement) {
-            fileNameElement.textContent = file.name;
-        }
-        
-        // Локальный проект (виртуальный): не уходит на сервер, отображается отдельно
-        if (!userProjects.some((p) => p && p.id === LOCAL_PROJECT_ID)) {
-            userProjects.push({ id: LOCAL_PROJECT_ID, name: LOCAL_PROJECT_NAME, createdAt: new Date().toISOString() });
-        }
-
-        // Создаем информацию о модели
-        const modelInfo = {
-            id: 'local-' + Date.now(),
-            url: objectUrl,
-            name: file.name,
-            displayName: file.name,
-            projectId: LOCAL_PROJECT_ID,
-            format: format,
-            isLocalFile: true,
-        };
-
-        userModels.unshift(modelInfo);
-        rebuildModelSelector();
-
-        const modelSelect = document.getElementById('model-select');
-        if (modelSelect) {
-            modelSelect.value = objectUrl;
-            currentModelPath = objectUrl;
-            setTimeout(() => {
-                loadModel().catch((error) => {
-                    console.error('Ошибка при загрузке локальной модели:', error);
-                });
-            }, 100);
-        }
-
-        return modelInfo;
-    } catch (error) {
-        console.error('Ошибка при локальной загрузке модели:', error);
-        document.querySelector('.loading').textContent = `Ошибка локальной загрузки: ${error.message}`;
-        setTimeout(() => {
-            document.querySelector('.loading').style.display = 'none';
-        }, 3000);
-        return null;
-    }
+    console.warn('Локальная загрузка модели отключена в этой версии.');
+    return null;
 }
 
 // Переименовываем дублирующуюся функцию
@@ -5141,27 +5311,11 @@ function updateUrlWithModel(modelName) {
     }
 }
 
-// Функция для получения ссылки на текущую модель
+// Ссылка на текущий подпроект: базовый URL + код (?model=<код>).
 function getCurrentModelLink() {
-    // Получаем базовый URL страницы
     const baseUrl = window.location.origin + window.location.pathname;
-
-    // Получаем текущую выбранную модель
-    const modelSelect = document.getElementById('model-select');
-    if (!modelSelect || modelSelect.selectedIndex === -1) {
-        return baseUrl; // Возвращаем базовую ссылку если модель не выбрана
-    }
-
-    const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-    // Шарим именно displayName (а не "Проект — Имя"): так короче и стабильнее.
-    const shareName = selectedOption.dataset.displayName || selectedOption.textContent;
-    const safeParam = createSafeModelParam(shareName);
-
-    if (!safeParam) {
-        return baseUrl;
-    }
-
-    return `${baseUrl}?model=${encodeURIComponent(safeParam)}`;
+    if (!currentSubproject || !currentSubproject.code) return baseUrl;
+    return `${baseUrl}?model=${encodeURIComponent(currentSubproject.code)}`;
 }
 
 // Функция для копирования ссылки на модель в буфер обмена
@@ -5289,85 +5443,74 @@ function setupShareButton() {
 
 }
 
-// Функция для загрузки модели по URL параметру
+// Резолвит подпроект по коду из URL (?model=<код>) и показывает его модели.
+// Возвращает true, если модель загружена; иначе показывает «Модель не найдена!».
 async function loadModelFromUrlParam() {
     try {
-        const modelParam = getModelParam();
-        if (!modelParam) {
-            return false;
-        }
+        const param = getModelParam();
+        if (!param) { showModelNotFound(); return false; }
 
-        console.log('Найден параметр модели в URL:', modelParam);
+        console.log('Параметр модели в URL:', param);
 
-        if (!Array.isArray(userModels) || userModels.length === 0) {
-            console.log('Список моделей пуст, поиск невозможен');
-            return false;
-        }
+        // Строгий поиск подпроекта по коду
+        let sub = getSubprojectByCode(param);
 
-        const needle = modelParam.toLowerCase();
-        const safeNeedle = (createSafeModelParam(modelParam) || '').toLowerCase();
-
-        // Поиск с приоритетом:
-        // 4) точное совпадение по displayName
-        // 3) точное совпадение по name (имя файла)
-        // 2) по хвосту key
-        // 1) подстрока
-        let bestMatch = null;
-        let bestScore = -1;
-        for (const model of userModels) {
-            if (!model) continue;
-            const safeDisplay = (createSafeModelParam(model.displayName) || '').toLowerCase();
-            const safeName = (createSafeModelParam(model.name) || '').toLowerCase();
-            const keyTail = (model.key || '').split('/').pop() || '';
-            const safeKeyTail = (createSafeModelParam(keyTail) || '').toLowerCase();
-
-            let score = -1;
-            if (safeDisplay && safeDisplay === safeNeedle) score = 4;
-            else if (safeName && safeName === safeNeedle) score = 3;
-            else if (safeKeyTail && safeKeyTail === safeNeedle) score = 2;
-            else if (
-                (model.displayName && model.displayName.toLowerCase().includes(needle)) ||
-                (model.name && model.name.toLowerCase().includes(needle)) ||
-                keyTail.toLowerCase().includes(needle)
-            ) score = 1;
-
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = model;
-                if (score === 4) break;
+        // Фолбэк для старых ссылок ?model=<имя> (устаревший нечёткий поиск)
+        if (!sub) {
+            const legacy = legacyFindModelByName(param);
+            if (legacy) {
+                sub = getSubproject(legacy.subprojectId);
+                console.log('Старая ссылка по имени, подпроект:', sub && sub.name);
             }
         }
 
-        if (!bestMatch) {
-            console.log(`Модель "${modelParam}" не найдена`);
-            return false;
-        }
+        if (!sub) { console.log('Код не найден:', param); showModelNotFound(); return false; }
 
-        console.log('Найдена модель:', bestMatch.name);
+        const urlToLoad = renderSubprojectView(sub);
+        if (!urlToLoad) { console.log('В подпроекте нет моделей:', sub.name); showModelNotFound(); return false; }
 
-        const fileUrl = bestMatch.url;
-        const modelSelect = document.getElementById('model-select');
-        if (modelSelect) {
-            for (let i = 0; i < modelSelect.options.length; i++) {
-                const option = modelSelect.options[i];
-                if (option.value === fileUrl || option.dataset.id === bestMatch.id) {
-                    modelSelect.selectedIndex = i;
-                    break;
-                }
-            }
-        }
+        if (!scene) { console.error('Scene не инициализирован'); return false; }
 
-        if (!scene) {
-            console.error('Scene не инициализирован, не можем загрузить модель');
-            return false;
-        }
-
-        currentModelPath = fileUrl;
+        currentModelPath = urlToLoad;
         await loadModel();
-
         return true;
     } catch (error) {
-        console.error('Ошибка при загрузке модели по URL параметру:', error);
+        console.error('Ошибка при загрузке модели по коду:', error);
+        showModelNotFound();
         return false;
     }
+}
+
+// УСТАРЕВШЕЕ: нечёткий поиск модели по имени — только чтобы старые ссылки
+// вида ?model=<имя-модели> продолжали работать. Новые ссылки используют код подпроекта.
+function legacyFindModelByName(modelParam) {
+    if (!Array.isArray(userModels) || userModels.length === 0) return null;
+    const needle = modelParam.toLowerCase();
+    const safeNeedle = (createSafeModelParam(modelParam) || '').toLowerCase();
+    let bestMatch = null;
+    let bestScore = -1;
+    for (const model of userModels) {
+        if (!model) continue;
+        const safeDisplay = (createSafeModelParam(model.displayName) || '').toLowerCase();
+        const safeName = (createSafeModelParam(model.name) || '').toLowerCase();
+        const keyTail = (model.key || '').split('/').pop() || '';
+        const safeKeyTail = (createSafeModelParam(keyTail) || '').toLowerCase();
+
+        let score = -1;
+        if (safeDisplay && safeDisplay === safeNeedle) score = 4;
+        else if (safeName && safeName === safeNeedle) score = 3;
+        else if (safeKeyTail && safeKeyTail === safeNeedle) score = 2;
+        else if (
+            (model.displayName && model.displayName.toLowerCase().includes(needle)) ||
+            (model.name && model.name.toLowerCase().includes(needle)) ||
+            keyTail.toLowerCase().includes(needle)
+        ) score = 1;
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMatch = model;
+            if (score === 4) break;
+        }
+    }
+    return bestMatch;
 }
