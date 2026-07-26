@@ -35,6 +35,7 @@ agr-viewer/
 ├── index.html              ← сайт
 ├── script.js               ← сайт
 ├── models.json             ← список моделей (создаст функция при первой загрузке)
+├── projects.json           ← список проектов (создаст функция при первом изменении)
 ├── models/
 │   └── 1715000000000_example.glb
 └── environments/
@@ -42,6 +43,28 @@ agr-viewer/
     ├── day.hdr
     └── night.hdr
 ```
+
+Каждая запись в `models.json` имеет вид:
+```json
+{
+  "id": "uuid",
+  "name": "house.glb",              // оригинальное имя файла
+  "displayName": "Фасад финал",     // пользовательское имя модели
+  "projectId": "uuid|default",      // привязка к проекту
+  "key": "models/...",
+  "format": "glb",
+  "size": 12345678,
+  "uploadedAt": "...",
+  "url": "https://..."
+}
+```
+
+Записи в `projects.json`:
+```json
+{ "id": "uuid", "name": "Дом на Тверской", "createdAt": "..." }
+```
+
+При первом запуске после миграции бэкенд автоматически проставляет старым моделям `displayName = name` и `projectId = "default"` (специальный проект «Без проекта»).
 
 HDR-карты залейте вручную через консоль один раз.
 
@@ -85,10 +108,18 @@ zip -r ../function.zip index.js package.json node_modules
 
 У Cloud Function один URL, маршрут передаётся в query-параметре `?action=…` (Яндекс не пропускает дополнительные сегменты пути в код функции — поэтому не `/upload`, а `?action=upload`).
 
+Модели:
 - `GET  …/<id>` → список моделей (используется только как health-check; сайт читает `models.json` напрямую из бакета)
-- `POST …/<id>?action=upload` (X-Admin-Token) — body `{ name, size, format }`, возвращает подписанный PUT URL
+- `POST …/<id>?action=upload` (X-Admin-Token) — body `{ name, size, format, displayName, projectId? | newProjectName? }`, возвращает подписанный PUT URL и подготовленную запись модели
 - `POST …/<id>?action=commit` (X-Admin-Token) — body `{ model }`, добавляет запись в `models.json`
 - `POST …/<id>?action=delete` (X-Admin-Token) — body `{ id }`, удаляет запись и объект
+- `POST …/<id>?action=update` (X-Admin-Token) — body `{ id, displayName?, projectId? }`, переименовывает модель и/или переносит в другой проект
+
+Проекты:
+- `GET  …/<id>?action=projects` → список проектов
+- `POST …/<id>?action=project-create` (X-Admin-Token) — body `{ name }`
+- `POST …/<id>?action=project-rename` (X-Admin-Token) — body `{ id, name }`
+- `POST …/<id>?action=project-delete` (X-Admin-Token) — body `{ id }` (запрещено, если в проекте остались модели)
 
 ## 4. Хостинг сайта
 
@@ -118,7 +149,11 @@ aws --endpoint-url=https://storage.yandexcloud.net s3 cp script.js  s3://agr-vie
       content="https://functions.yandexcloud.net/d4eXXXXXXXXXXXXXXXXX">
 ```
 
-Любой пользователь сможет смотреть модели без пароля. При попытке заливки/удаления сайт спросит `ADMIN_TOKEN` (через `prompt`) и запомнит его в `localStorage` под ключом `agrAdminToken`. Чтобы сбросить — в консоли браузера выполнить `localStorage.removeItem('agrAdminToken')`.
+Любой пользователь сможет смотреть модели без пароля. При попытке заливки/удаления сайт спросит `ADMIN_TOKEN` (через `prompt`) и запомнит его в `localStorage` под ключом `agrAdminToken`. После этого появится кнопка ⚙ в левом верхнем углу — модалка с управлением моделями (переименование, смена проекта, удаление) и проектами (создание, переименование, удаление). Чтобы сбросить — в консоли браузера выполнить `localStorage.removeItem('agrAdminToken')`.
+
+### Пользовательский флоу загрузки
+
+При выборе файла открывается диалог: ввод **названия модели** (по умолчанию — имя файла без расширения) и выбор **проекта** — либо существующего из списка, либо создание нового по имени. Модель не может быть без проекта; если в системе пока ни одного проекта кроме «Без проекта», диалог сразу предложит ввести имя нового проекта.
 
 ## Стоимость (порядок)
 
