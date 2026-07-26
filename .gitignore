@@ -7,3 +7,10 @@ node_modules/
 backend/node_modules/
 deploy/node_modules/
 function.zip
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
