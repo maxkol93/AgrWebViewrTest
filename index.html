@@ -799,6 +799,10 @@
             padding: 20px 34px; border-radius: 12px;
             text-align: center;
         }
+        #model-not-found .mnf-hint {
+            display: inline-block; margin-top: 12px;
+            font-size: 15px; font-weight: 400;
+        }
         #admin-settings-btn {
             position: absolute;
             top: 20px;
@@ -1131,7 +1135,7 @@
         </div>
 
         <!-- Заглушка, когда по коду нет моделей -->
-        <div id="model-not-found">Модель не найдена!</div>
+        <div id="model-not-found">Модель не найдена!<br><span class="mnf-hint">Запрос на добавление НПМ отправьте на kolesnikov_m@mr-group.ru</span></div>
 
         <div id="controls" class="controls">
             <button id="reset-camera" class="control-btn">Сброс камеры</button>
