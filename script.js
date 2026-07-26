@@ -3945,6 +3945,43 @@ function formatBytes(bytes) {
     return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+// Кнопка-иконка для строк админки.
+function makeIconBtn(glyph, title) {
+    const b = document.createElement('button');
+    b.className = 'icon-btn';
+    b.textContent = glyph;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    return b;
+}
+
+// Ссылка на подпроект по коду.
+function subprojectLink(code) {
+    return `${window.location.origin}${window.location.pathname}?model=${encodeURIComponent(code)}`;
+}
+
+// Копирование текста в буфер обмена + уведомление.
+async function copyToClipboard(text, okMsg = 'Ссылка скопирована! 🔗') {
+    try {
+        await navigator.clipboard.writeText(text);
+        showNotification(okMsg, 'success');
+    } catch (e) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            showNotification(okMsg, 'success');
+        } catch (e2) {
+            showNotification('Не удалось скопировать ❌', 'error');
+        }
+    }
+}
+
 // Заполняет <select> проектами. Возвращает выбранный id.
 function fillProjectSelect(select, selectedId) {
     if (!select) return '';
@@ -4266,16 +4303,21 @@ function renderAdminModels() {
         const actions = document.createElement('div');
         actions.className = 'row-actions';
 
-        const editBtn = document.createElement('button');
-        editBtn.textContent = 'Изменить';
+        const editBtn = makeIconBtn('✎', 'Изменить');
         editBtn.addEventListener('click', async () => {
             await openModelForm({ mode: 'edit', model: m });
         });
         actions.appendChild(editBtn);
 
-        const delBtn = document.createElement('button');
-        delBtn.textContent = 'Удалить';
-        delBtn.className = 'danger';
+        const shareBtn = makeIconBtn('🔗', 'Скопировать ссылку');
+        shareBtn.addEventListener('click', () => {
+            if (sub && sub.code) copyToClipboard(subprojectLink(sub.code));
+            else showNotification('У подпроекта нет кода', 'error');
+        });
+        actions.appendChild(shareBtn);
+
+        const delBtn = makeIconBtn('🗑', 'Удалить');
+        delBtn.className = 'icon-btn danger';
         delBtn.addEventListener('click', async () => {
             if (!window.confirm(`Удалить модель "${m.displayName || m.name}" (${formatDateRu(m.modelDate)})?`)) return;
             try {

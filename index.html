@@ -769,9 +769,17 @@
         .admin-add-sub .admin-input { flex: 1; }
         .admin-add-sub .admin-input-code { flex: 0 0 90px; }
         .admin-input:focus { border-color: #4285f4; }
+        /* Иконки-кнопки в строках админки */
+        .admin-row button.icon-btn {
+            width: 30px; height: 28px; padding: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-size: 14px; line-height: 1;
+        }
+        /* Модалка модели — поверх админ-панели (открывается из неё) */
+        #model-form-modal { z-index: 3100; }
         /* Лейбл проекта, комментарий версии и заглушка «не найдено» */
-        #model-selector { flex-direction: column; align-items: stretch; gap: 8px; }
-        #model-selector-row { display: flex; gap: 12px; align-items: center; }
+        #model-selector { flex-direction: row; align-items: center; gap: 14px; }
+        #model-info { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
         #project-label {
             font-family: 'Unbounded', sans-serif; font-weight: 600;
             font-size: 15px; color: #fff; max-width: 340px;
@@ -794,7 +802,8 @@
         #admin-settings-btn {
             position: absolute;
             top: 20px;
-            left: 20px;
+            left: auto;
+            right: 120px;
             width: 36px;
             height: 36px;
             background-color: rgba(0,0,0,0.75);
@@ -1113,12 +1122,12 @@
         <button id="skipHDR">Пропустить загрузку HDR</button>
         
         <div id="model-selector" style="display:none">
-            <div id="project-label"></div>
-            <div id="model-selector-row">
+            <div id="model-info">
+                <div id="project-label"></div>
                 <select id="model-select"></select>
-                <button id="share-model-btn" class="control-btn" title="Скопировать ссылку на эту модель">Поделиться</button>
+                <div id="model-comment"></div>
             </div>
-            <div id="model-comment"></div>
+            <button id="share-model-btn" class="control-btn" title="Скопировать ссылку на эту модель">Поделиться</button>
         </div>
 
         <!-- Заглушка, когда по коду нет моделей -->
