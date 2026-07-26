@@ -5481,36 +5481,19 @@ async function loadModelFromUrlParam() {
     }
 }
 
-// УСТАРЕВШЕЕ: нечёткий поиск модели по имени — только чтобы старые ссылки
-// вида ?model=<имя-модели> продолжали работать. Новые ссылки используют код подпроекта.
+// УСТАРЕВШЕЕ: поиск модели по имени — только чтобы старые ссылки вида
+// ?model=<имя-модели> продолжали работать. Строго ТОЧНОЕ совпадение (по displayName
+// или имени файла), никаких подстрок — иначе неизвестный код мог бы подхватить
+// случайную модель. Новые ссылки используют код подпроекта.
 function legacyFindModelByName(modelParam) {
     if (!Array.isArray(userModels) || userModels.length === 0) return null;
-    const needle = modelParam.toLowerCase();
     const safeNeedle = (createSafeModelParam(modelParam) || '').toLowerCase();
-    let bestMatch = null;
-    let bestScore = -1;
+    if (!safeNeedle) return null;
     for (const model of userModels) {
         if (!model) continue;
         const safeDisplay = (createSafeModelParam(model.displayName) || '').toLowerCase();
         const safeName = (createSafeModelParam(model.name) || '').toLowerCase();
-        const keyTail = (model.key || '').split('/').pop() || '';
-        const safeKeyTail = (createSafeModelParam(keyTail) || '').toLowerCase();
-
-        let score = -1;
-        if (safeDisplay && safeDisplay === safeNeedle) score = 4;
-        else if (safeName && safeName === safeNeedle) score = 3;
-        else if (safeKeyTail && safeKeyTail === safeNeedle) score = 2;
-        else if (
-            (model.displayName && model.displayName.toLowerCase().includes(needle)) ||
-            (model.name && model.name.toLowerCase().includes(needle)) ||
-            keyTail.toLowerCase().includes(needle)
-        ) score = 1;
-
-        if (score > bestScore) {
-            bestScore = score;
-            bestMatch = model;
-            if (score === 4) break;
-        }
+        if (safeDisplay === safeNeedle || safeName === safeNeedle) return model;
     }
-    return bestMatch;
+    return null;
 }
