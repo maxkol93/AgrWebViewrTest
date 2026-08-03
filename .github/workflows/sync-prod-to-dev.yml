@@ -1,0 +1,45 @@
+name: Sync prod → dev (данные)
+
+# Копирует данные прод-бакета в дев-бакет: модели, HDR, каталог.
+# Сайт (index.html / script.js) не копируется — он деплоится из репозитория.
+#
+# Направление ЗАШИТО в этот файл: источник PROD_BUCKET, приёмник DEV_BUCKET.
+# Обратно данные не поедут никогда — даже если нажать не ту кнопку.
+on:
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "Только показать план, ничего не менять (--dry)"
+        type: boolean
+        default: true
+      prune:
+        description: "Удалить в деве то, чего уже нет в проде (--prune)"
+        type: boolean
+        default: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Установить зависимости
+        run: npm --prefix deploy install --no-audit --no-fund
+
+      - name: Синхронизация данных
+        env:
+          SRC_BUCKET: ${{ vars.PROD_BUCKET }}
+          DEST_BUCKET: ${{ vars.DEV_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT: https://storage.yandexcloud.net
+          S3_REGION: ru-central1
+        run: |
+          FLAGS=""
+          if [ "${{ inputs.dry }}" = "true" ]; then FLAGS="$FLAGS --dry"; fi
+          if [ "${{ inputs.prune }}" = "true" ]; then FLAGS="$FLAGS --prune"; fi
+          node deploy/sync-buckets.mjs $FLAGS

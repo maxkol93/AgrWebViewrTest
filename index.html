@@ -2027,6 +2027,7 @@
         });
     </script>
     <div id="app-version">VERSION_PLACEHOLDER</div>
+    <!-- ENV_BADGE_PLACEHOLDER --><!-- на не-прод стенде деплой подставляет сюда бейдж -->
     <style>
         #app-version {
             position: fixed; right: 8px; bottom: 6px;
@@ -2034,6 +2035,14 @@
             color: #fff; opacity: .35; letter-spacing: .3px;
             text-shadow: 0 1px 2px rgba(0,0,0,.55);
             pointer-events: none; user-select: none; z-index: 50;
+        }
+        #env-badge {
+            position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+            font-family: 'Unbounded', sans-serif; font-size: 11px; font-weight: 600;
+            letter-spacing: 1.2px; color: #1a1200; background: #ffb020;
+            padding: 3px 14px 4px; border-radius: 0 0 8px 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,.35);
+            pointer-events: none; user-select: none; z-index: 10000;
         }
     </style>
 </body>

@@ -1,14 +1,46 @@
 name: Deploy (Yandex Cloud)
 
-# «Одна кнопка» = git push в main.  Можно также запустить вручную (workflow_dispatch).
+# Два стенда:
+#   push в main → прод   (environment: prod)
+#   push в dev  → дев    (environment: dev)
+# Секреты называются одинаково, значения берутся из соответствующего
+# GitHub Environment — поэтому скрипты деплоя одни и те же для обоих стендов.
+# Можно запустить и вручную (workflow_dispatch), выбрав стенд.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Куда деплоить"
+        type: choice
+        options: [dev, prod]
+        default: dev
 
 jobs:
-  deploy:
+  # Отдельная джоба нужна потому, что `environment:` вычисляется до шагов:
+  # так стенд определяется в одном месте, а не дублируется выражением.
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.pick.outputs.target }}
+    steps:
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TARGET="${{ inputs.target }}"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            TARGET="prod"
+          else
+            TARGET="dev"
+          fi
+          echo "Стенд: $TARGET (ветка ${{ github.ref_name }})"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.target }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,6 +56,7 @@ jobs:
 
       - name: Залить сайт в бакет
         env:
+          APP_ENV: ${{ needs.resolve.outputs.target }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
@@ -62,3 +95,9 @@ jobs:
       - name: Убрать ключ
         if: always()
         run: rm -f sa-key.json
+
+      - name: Итог
+        run: |
+          # Имя бакета — секрет, в логе оно замаскировано, поэтому URL берём из переменной.
+          echo "Стенд ${{ needs.resolve.outputs.target }} обновлён."
+          echo "Сайт: ${{ vars.SITE_URL }}"

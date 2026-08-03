@@ -5,7 +5,9 @@
 // Конфигурация берётся из переменных окружения:
 //   S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
 //   S3_ENDPOINT (опц.), S3_REGION (опц.),
-//   STORAGE_BASE_URL, API_BASE_URL
+//   STORAGE_BASE_URL, API_BASE_URL,
+//   APP_ENV (опц., 'prod' по умолчанию) — на не-прод стенде добавляет
+//     суффикс к версии, бейдж в углу и префикс в <title>, чтобы не спутать вкладки
 //
 // Запуск:  node deploy/deploy-frontend.mjs
 
@@ -44,7 +46,10 @@ const {
   S3_REGION = 'ru-central1',
   STORAGE_BASE_URL,
   API_BASE_URL,
+  APP_ENV = 'prod',
 } = process.env;
+
+const isProd = APP_ENV === 'prod';
 
 function required(name, value) {
   if (!value) {
@@ -80,16 +85,22 @@ async function put(key, body, contentType) {
 }
 
 async function main() {
-  console.log(`→ Заливаю сайт в бакет "${S3_BUCKET}"…`);
+  console.log(`→ Заливаю сайт в бакет "${S3_BUCKET}" (окружение: ${APP_ENV})…`);
 
-  const version = appVersion();
+  // На не-прод стенде версия помечается суффиксом: v0.2.7-dev
+  const version = appVersion() + (isProd ? '' : `-${APP_ENV}`);
   console.log(`  версия: ${version}`);
 
   let html = await readFile(path.join(root, 'index.html'), 'utf8');
   html = html
     .replaceAll('STORAGE_BASE_URL_PLACEHOLDER', STORAGE_BASE_URL)
     .replaceAll('API_BASE_URL_PLACEHOLDER', API_BASE_URL)
-    .replaceAll('VERSION_PLACEHOLDER', version);
+    .replaceAll('VERSION_PLACEHOLDER', version)
+    .replaceAll('<!-- ENV_BADGE_PLACEHOLDER -->',
+      isProd ? '' : `<div id="env-badge">${APP_ENV.toUpperCase()}</div>`);
+
+  // Префикс во вкладке — чтобы дев-вкладку нельзя было принять за прод
+  if (!isProd) html = html.replace('<title>', `<title>[${APP_ENV.toUpperCase()}] `);
 
   if (html.includes('_PLACEHOLDER')) {
     console.error('✗ В index.html остались неподставленные плейсхолдеры — прерываю.');

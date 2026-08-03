@@ -1,5 +1,7 @@
 # Секреты деплоя — НЕ коммитить
 deploy/config.local.ps1
+deploy/config.dev.ps1
+deploy/dev-stand.out.json
 sa-key.json
 
 # Зависимости и артефакты

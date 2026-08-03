@@ -5,6 +5,11 @@ name: Import catalog (projects/subprojects)
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: "На каком стенде импортировать"
+        type: choice
+        options: [dev, prod]
+        default: dev
       reset:
         description: "Пересобрать каталог с нуля (--reset, для первого прогона)"
         type: boolean
@@ -17,6 +22,7 @@ on:
 jobs:
   import:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}   # бакет берётся из секретов выбранного стенда
     steps:
       - uses: actions/checkout@v4
 
@@ -38,5 +44,6 @@ jobs:
           FLAGS=""
           if [ "${{ inputs.reset }}" = "true" ]; then FLAGS="$FLAGS --reset"; fi
           if [ "${{ inputs.dry }}" = "true" ]; then FLAGS="$FLAGS --dry"; fi
+          echo "Стенд: ${{ inputs.target }}"
           echo "Запуск: node deploy/import-catalog.mjs$FLAGS"
           node deploy/import-catalog.mjs $FLAGS
