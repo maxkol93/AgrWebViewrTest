@@ -4,9 +4,6 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Просмотр 3D модели</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;700&display=swap" rel="stylesheet">
     <!-- Конфигурация Yandex Object Storage -->
     <!-- storage-base-url: публичный префикс бакета, напр. https://storage.yandexcloud.net/agr-viewer -->
     <!-- api-base-url:     URL Yandex Cloud Function, напр. https://functions.yandexcloud.net/d4eXXXXX -->
@@ -14,6 +11,10 @@
     <meta id="api-base-url" name="api-base-url" content="API_BASE_URL_PLACEHOLDER">
     
     <style>
+        /* Шрифт Unbounded раздаётся из своего бакета, а не с fonts.gstatic.com:
+           у части провайдеров домены Google деградируют и блокируют отрисовку.
+           Правила @font-face подставляет deploy/deploy-frontend.mjs. */
+        /* FONT_FACE_PLACEHOLDER */
         body {margin:0;padding:0;width:100%;height:100%;font-family:'Unbounded',sans-serif;overscroll-behavior:none}
         /* Добавляем запрет выделения текста для всех элементов интерфейса */
         .loading, #skipHDR, #controls, #display-mode, #help-icon, #help-panel, 
@@ -1347,12 +1348,16 @@
         </div>
     </div>
 
-    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+    <!-- three.js раздаётся из того же бакета, что и сайт: unpkg.com (Cloudflare)
+         у части российских провайдеров отдаёт сотни килобайт десятками секунд,
+         а без three страница не покажет вообще ничего. Версия прибита
+         в deploy/package.json, файлы заливает deploy/deploy-frontend.mjs. -->
+    <script async src="./vendor/es-module-shims.js"></script>
     <script type="importmap">
     {
         "imports": {
-            "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
-            "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+            "three": "./vendor/three/build/three.module.js",
+            "three/addons/": "./vendor/three/examples/jsm/"
         }
     }
     </script>
@@ -1770,7 +1775,8 @@
 
         // Функция onTelegramAuth удалена, поскольку проверка подписки больше не нужна
     </script>
-    <script type="module" src="./script.js"></script>
+    <!-- Имя с хэшем подставляет деплой — так script.js кэшируется на год. -->
+    <script type="module" src="./SCRIPT_JS_PLACEHOLDER"></script>
     
     <!-- Глобальная функция для обработки камеры и управления -->
     <script>

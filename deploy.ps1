@@ -48,11 +48,11 @@ if (-not (Get-Command yc   -ErrorAction SilentlyContinue)) {
 }
 
 # ── 3. Зависимости загрузчика ────────────────────────────────────────────────
-if (-not (Test-Path (Join-Path $root "deploy\node_modules"))) {
-  Step "Устанавливаю зависимости загрузчика (один раз)…"
-  npm --prefix deploy install --silent
-  if ($LASTEXITCODE -ne 0) { Fail "npm install в deploy\ не удался." }
-}
+# Ставим каждый раз: в deploy\package.json лежат ещё и three.js, Draco и шрифт,
+# которые заливаются на сайт, — их версии должны совпадать с package.json.
+Step "Проверяю зависимости загрузчика…"
+npm --prefix deploy install --silent --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { Fail "npm install в deploy\ не удался." }
 
 # ── 4. Сайт → бакет ──────────────────────────────────────────────────────────
 Step "Заливаю сайт в Object Storage (стенд: $Target)…"

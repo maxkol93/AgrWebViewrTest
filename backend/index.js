@@ -25,6 +25,12 @@ const COMMON_NAME = 'Common';
 
 const UPLOAD_URL_TTL = 3600;
 
+// Ключ модели содержит метку времени и никогда не переиспользуется, поэтому
+// её можно кэшировать навсегда. Без этого заголовка Object Storage не отдаёт
+// Cache-Control вообще, браузер уходит в эвристику по Last-Modified и качает
+// свежезалитые 30 МБ заново при каждом открытии. См. docs/perf-loading-plan.md.
+const MODEL_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
 const s3 = new S3Client({
   region: REGION,
   endpoint: ENDPOINT,
@@ -456,12 +462,19 @@ async function handleUpload(event) {
   const key = `models/${Date.now()}_${safeFileName(name)}`;
   const contentType = format === 'glb' ? 'model/gltf-binary' : 'model/gltf+json';
 
-  const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
+  // Заголовки входят в подпись, поэтому клиент обязан отправить их ровно так же,
+  // как здесь, — отдаём их вместе со ссылкой в uploadHeaders.
+  const command = new PutObjectCommand({
+    Bucket: BUCKET,
+    Key: key,
+    ContentType: contentType,
+    CacheControl: MODEL_CACHE_CONTROL,
+  });
   const uploadUrl = await getSignedUrl(s3, command, { expiresIn: UPLOAD_URL_TTL });
 
   return reply(200, {
     uploadUrl,
-    uploadHeaders: { 'Content-Type': contentType },
+    uploadHeaders: { 'Content-Type': contentType, 'Cache-Control': MODEL_CACHE_CONTROL },
     model: {
       id,
       name,               // оригинальное имя файла (для скачивания/диагностики)

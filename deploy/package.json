@@ -5,6 +5,9 @@
   "type": "module",
   "description": "Загрузчик сайта в Yandex Object Storage (используется deploy.ps1 и GitHub Actions)",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.654.0"
+    "@aws-sdk/client-s3": "^3.654.0",
+    "@fontsource/unbounded": "5.3.0",
+    "es-module-shims": "1.8.0",
+    "three": "0.159.0"
   }
 }

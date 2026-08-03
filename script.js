@@ -1497,35 +1497,34 @@ async function init() {
 function createEnvironment() {
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     pmremGenerator.compileEquirectangularShader();
-    
+
     const skipHDRButton = document.getElementById('skipHDR');
     if (skipHDRButton) {
         skipHDRButton.style.display = 'none'; // Всегда скрываем кнопку пропуска HDR
     }
-    
-    let hdrLoading = false;
-    
-    if (USE_HDR) {
-        hdrLoading = true;
-        const rgbeLoader = new RGBELoader();
-        rgbeLoader.setDataType(THREE.HalfFloatType);
-        
-        document.querySelector('.loading').textContent = 'Загрузка карты окружения...';
-        
-        // Удаляем таймер показа кнопки пропуска HDR
-        
-        // Сохраняем обработчик, но он не будет виден
-        skipHDRButton.onclick = function() {
-            if (hdrLoading) {
-                hdrLoading = false;
-                createBasicEnvironment(pmremGenerator);
-            }
-        };
-        
-        loadHDR(getHdrUrl(HDR_MAPS[currentHdrIndex].path), pmremGenerator, rgbeLoader, hdrLoading);
-    } else {
-        createBasicEnvironment(pmremGenerator);
-    }
+
+    // Стартуем на базовом окружении: оно считается на месте, без сети.
+    // HDR (несжатый RGBE, несколько МБ) подтягиваем уже после модели —
+    // иначе он выгрызает канал ровно тогда, когда качается .glb.
+    // См. docs/perf-loading-plan.md, п. 5.
+    createBasicEnvironment(pmremGenerator);
+}
+
+// Материалы модели берут освещение из scene.environment (свой envMap им никто
+// не присваивает), поэтому подмена карты после загрузки видна сразу.
+let hdrRequested = false;
+
+function loadEnvironmentHDR() {
+    if (!USE_HDR || hdrRequested) return;
+    hdrRequested = true;
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+
+    const rgbeLoader = new RGBELoader();
+    rgbeLoader.setDataType(THREE.HalfFloatType);
+
+    loadHDR(getHdrUrl(HDR_MAPS[currentHdrIndex].path), pmremGenerator, rgbeLoader, true);
 }
 
 function loadHDR(hdrPath, pmremGenerator, rgbeLoader, hdrLoading) {
@@ -1576,10 +1575,11 @@ function changeHDR(index) {
     if (index < 0 || index >= HDR_MAPS.length) return;
     
     currentHdrIndex = index;
-    
+    hdrRequested = true; // выбор пользователя важнее отложенной автозагрузки
+
     // Обновляем UI, чтобы отметить активную карту
     updateHDRInterface();
-    
+
     // Загружаем новую HDR карту
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     pmremGenerator.compileEquirectangularShader();
@@ -1979,6 +1979,7 @@ async function loadModel() {
     if (!pathToLoad) {
         const loading = document.querySelector('.loading');
         if (loading) loading.style.display = 'none';
+        loadEnvironmentHDR(); // качать нечего — за канал никто не борется
         return null;
     }
 
@@ -2030,7 +2031,9 @@ async function loadModel() {
         // Используем GLTFLoader для GLTF/GLB
         const loader = new GLTFLoader();
         const dracoLoader = new DRACOLoader();
-        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+        // Декодер лежит рядом с сайтом, а не на www.gstatic.com: при недоступном
+        // gstatic .glb докачивался до 100% и намертво вставал на декодировании.
+        dracoLoader.setDecoderPath('./vendor/draco/');
         loader.setDRACOLoader(dracoLoader);
         
         const gltf = await loader.loadAsync(pathToLoad, function(xhr) {
@@ -2271,8 +2274,11 @@ async function loadModel() {
     } catch (error) {
         console.error('Ошибка при загрузке модели:', error);
         document.querySelector('.loading').textContent = 'Ошибка загрузки модели: ' + error.message;
-        
+
         // Кнопка загрузки модели заменена на кнопку "Поделиться"
+    } finally {
+        // Модель своё уже скачала (или упала) — теперь можно занять канал под HDR.
+        if (loadToken === currentLoadToken) loadEnvironmentHDR();
     }
 }
 
