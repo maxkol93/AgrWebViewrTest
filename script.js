@@ -501,6 +501,9 @@ function showModelNotFound() {
     });
     const loading = document.querySelector('.loading');
     if (loading) loading.style.display = 'none';
+
+    // Тупик резолвера: модели не будет, значит канал свободен — можно за HDR.
+    loadEnvironmentHDR();
 }
 
 // Готовит пользовательский вид для подпроекта: лейбл, селектор версий, коммент.
@@ -1515,7 +1518,7 @@ function createEnvironment() {
 let hdrRequested = false;
 
 function loadEnvironmentHDR() {
-    if (!USE_HDR || hdrRequested) return;
+    if (!USE_HDR || hdrRequested || !renderer) return;
     hdrRequested = true;
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -1976,10 +1979,11 @@ async function loadModel() {
     const pathToLoad = currentModelPath;
 
     // Пустой путь: сцена стартует без модели (модель покажет резолвер по коду).
+    // HDR тут не трогаем: через 300 мс резолвер начнёт качать .glb, и HDR
+    // отобрал бы у него канал — ровно то, от чего мы уходим.
     if (!pathToLoad) {
         const loading = document.querySelector('.loading');
         if (loading) loading.style.display = 'none';
-        loadEnvironmentHDR(); // качать нечего — за канал никто не борется
         return null;
     }
 
