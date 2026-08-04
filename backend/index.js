@@ -631,6 +631,7 @@ function sanitizeTelemetry(raw) {
     sid: str(src.sid, 40),
     ts: str(src.ts, 40),
     app: str(src.app, 40),
+    tag: str(src.tag, 20),   // метка своего браузера, если посетитель её поставил
     code: str(src.code, 120),
     model: str(src.model, 200),
     outcome: str(src.outcome, 20),

@@ -12,6 +12,11 @@
 //   node deploy/telemetry-report.mjs --days 3        — только последние 3 дня (по умолчанию 7)
 //   node deploy/telemetry-report.mjs --slowest 20    — длиннее список худших сессий
 //   node deploy/telemetry-report.mjs --raw           — вывалить события как JSON (для своих раскопок)
+//   node deploy/telemetry-report.mjs --tag me        — только события с меткой me (свой браузер)
+//   node deploy/telemetry-report.mjs --no-tag        — только события без метки (живые пользователи)
+//
+// Метку браузер ставит сам: localStorage.setItem('agrTelemetry', 'me'). Свои открытия
+// при этом продолжают писаться — просто отделимы от чужих.
 //
 // Бакет в РФ доступен только с выключенным VPN, а разбирать удобно потом и где угодно,
 // поэтому дамп и отчёт разделены:
@@ -61,6 +66,8 @@ const days = argValue('--days', 7);
 const slowestCount = argValue('--slowest', 10);
 const raw = process.argv.includes('--raw');
 const fromFile = argString('--file');
+const onlyTag = argString('--tag');
+const noTag = process.argv.includes('--no-tag');
 
 if (!fromFile) {
   for (const [name, value] of Object.entries({ S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY })) {
@@ -236,6 +243,16 @@ async function main() {
     return;
   }
   if (broken) console.log(`  ! не удалось прочитать событий: ${broken}`);
+
+  // Фильтр по метке применяем и к --raw: дамп «только чужие» бывает нужен чаще отчёта.
+  if (onlyTag || noTag) {
+    const before = events.length;
+    events = events.filter((e) => (onlyTag ? e.tag === onlyTag : !e.tag));
+    console.log(`  фильтр по метке: ${onlyTag ? `tag=${onlyTag}` : 'без метки'}` +
+      ` — осталось ${events.length} из ${before}`);
+    if (!events.length) return;
+  }
+
   if (raw) {
     console.log(JSON.stringify(events, null, 2));
     return;
@@ -251,6 +268,7 @@ async function main() {
   phaseTable(ok, 'Фазы удачных загрузок');
   speedTable(ok);
   phaseTable(stuck, 'Фазы у тех, кто не дождался');
+  breakdown(events, 'По метке браузера («—» = живой пользователь)', (e) => e.tag);
   breakdown(events, 'По типу соединения', (e) => e.net && e.net.type);
   breakdown(events, 'По версии сайта', (e) => e.app);
   breakdown(events, 'По коду модели', (e) => e.code);

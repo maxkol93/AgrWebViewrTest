@@ -139,6 +139,19 @@ function depsTiming() {
     return { end: count ? Math.round(end) : undefined, bytes, cached, count };
 }
 
+// Метка своего браузера. `agrTelemetry = 'off'` по-прежнему выключает отправку,
+// любое другое значение уходит полем `tag`: свои открытия видно отдельно от
+// пользовательских, но из отчёта они не выпадают — медленная загрузка у автора
+// такой же интересный случай, как у всех остальных.
+function telemetryTag() {
+    try {
+        const value = (localStorage.getItem('agrTelemetry') || '').trim();
+        return value && value !== 'off' ? value.slice(0, 20) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 function telemetryPayload(outcome, err) {
     const nav = performance.getEntriesByType('navigation')[0];
     const deps = depsTiming();
@@ -176,6 +189,7 @@ function telemetryPayload(outcome, err) {
         sid: telemetry.sid,
         ts: new Date().toISOString(),
         app: versionEl ? versionEl.textContent.trim() : '',
+        tag: telemetryTag(),
         code: typeof getModelParam === 'function' ? (getModelParam() || '') : '',
         model: currentModelPath ? currentModelPath.split('/').pop().split('?')[0] : '',
         outcome,
