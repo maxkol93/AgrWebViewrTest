@@ -25,6 +25,11 @@ const COMMON_NAME = 'Common';
 
 const UPLOAD_URL_TTL = 3600;
 
+// Телеметрия загрузки: события фаз падают отдельными объектами в telemetry/<дата>/.
+// Читает и агрегирует их deploy/telemetry-report.mjs. См. docs/perf-loading-plan.md, п. 1.
+const TELEMETRY_PREFIX = 'telemetry/';
+const TELEMETRY_MAX_BODY = 8 * 1024;
+
 // Ключ модели содержит метку времени и никогда не переиспользуется, поэтому
 // её можно кэшировать навсегда. Без этого заголовка Object Storage не отдаёт
 // Cache-Control вообще, браузер уходит в эвристику по Last-Modified и качает
@@ -569,6 +574,128 @@ async function handleModelUpdate(event) {
   return reply(200, { ok: true, model: models[idx] });
 }
 
+// ─── Телеметрия ─────────────────────────────────────────────────────────────
+
+// sendBeacon шлёт text/plain, и на таком типе Cloud Functions отдаёт тело в base64.
+// Админские ручки ходят с application/json и в base64 не попадают, поэтому их
+// разбор не трогаем.
+function decodeBody(event) {
+  const raw = event.body || '';
+  return event.isBase64Encoded ? Buffer.from(raw, 'base64').toString('utf-8') : raw;
+}
+
+// Событие приходит из браузера, то есть подделать можно что угодно: берём только
+// известные поля, числа приводим к числам, строки режем по длине.
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : undefined;
+}
+
+// Дробные величины: downlink 0.4 Мбит/с — это ровно тот случай, ради которого
+// всё затевалось, округлять его до нуля нельзя.
+function numFrac(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : undefined;
+}
+
+function pickNumbers(src, keys) {
+  const out = {};
+  if (!src || typeof src !== 'object') return out;
+  for (const key of keys) {
+    const n = num(src[key]);
+    if (n !== undefined) out[key] = n;
+  }
+  return out;
+}
+
+const TELEMETRY_PHASES = [
+  'html',        // до конца загрузки самого index.html
+  'deps',        // до конца загрузки vendor/* (three, draco, шрифт) и script.js
+  'catalog',     // models.json + projects.json + subprojects.json
+  'glbWait',     // от готовности каталога до старта запроса .glb
+  'glbTtfb',     // от старта запроса .glb до первого байта
+  'glbDownload', // скачивание .glb
+  'glbParse',    // разбор glTF/Draco до готового объекта three
+  'firstFrame',  // от появления модели в сцене до первого кадра с ней
+  'total',       // от navigationStart до первого кадра (или до момента ухода)
+];
+
+function sanitizeTelemetry(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const str = (v, max) => {
+    const s = trimStr(v, max);
+    return s || undefined;
+  };
+  return {
+    v: num(src.v) || 1,
+    sid: str(src.sid, 40),
+    ts: str(src.ts, 40),
+    app: str(src.app, 40),
+    code: str(src.code, 120),
+    model: str(src.model, 200),
+    outcome: str(src.outcome, 20),
+    err: str(src.err, 300),
+    ms: pickNumbers(src.ms, TELEMETRY_PHASES),
+    glbBytes: num(src.glbBytes),
+    glbKbps: num(src.glbKbps),
+    glbCached: src.glbCached === true ? true : undefined,
+    depsBytes: num(src.depsBytes),
+    depsCached: num(src.depsCached),
+    net: {
+      ...pickNumbers(src.net, ['rtt']),
+      downlink: numFrac(src.net && src.net.downlink),
+      type: str(src.net && src.net.type, 20),
+      save: src.net && src.net.save === true ? true : undefined,
+    },
+    dev: {
+      ...pickNumbers(src.dev, ['mem', 'cpu', 'w', 'h']),
+      dpr: numFrac(src.dev && src.dev.dpr),
+      touch: src.dev && src.dev.touch === true ? true : undefined,
+    },
+    ua: str(src.ua, 300),
+  };
+}
+
+// Приём события. Открыт без авторизации — это единственная ручка, куда пишет
+// обычный посетитель. IP и прочие следы пользователя сознательно не сохраняем:
+// диагностике хватает effectiveType/rtt, которые присылает сам браузер.
+async function handleTelemetry(event) {
+  const body = decodeBody(event);
+  if (body.length > TELEMETRY_MAX_BODY) {
+    return reply(413, { error: 'Слишком большое событие' });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(body || '{}');
+  } catch {
+    return reply(400, { error: 'Тело не является JSON' });
+  }
+
+  const record = sanitizeTelemetry(parsed);
+  record.receivedAt = new Date().toISOString();
+
+  const day = record.receivedAt.slice(0, 10);
+  const key = `${TELEMETRY_PREFIX}${day}/${Date.now()}_${crypto.randomUUID().slice(0, 8)}.json`;
+
+  try {
+    await s3.send(new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Body: JSON.stringify(record),
+      ContentType: 'application/json; charset=utf-8',
+      CacheControl: 'no-cache, max-age=0',
+    }));
+  } catch (err) {
+    // Телеметрия — вспомогательная вещь: сломанная запись не должна выглядеть
+    // как отказ функции, ответ всё равно никто не читает (sendBeacon).
+    console.error('Не удалось записать событие телеметрии:', err);
+    return reply(500, { error: 'Событие не сохранено' });
+  }
+
+  return reply(200, { ok: true });
+}
+
 exports.handler = async (event) => {
   const method = (event.httpMethod || 'GET').toUpperCase();
   const action = (event.queryStringParameters || {}).action || '';
@@ -579,6 +706,9 @@ exports.handler = async (event) => {
     if (method === 'GET' && (action === '' || action === 'list')) return handleList();
     if (method === 'GET' && action === 'projects') return handleProjectsList();
     if (method === 'GET' && action === 'subprojects') return handleSubprojectsList();
+
+    // Без авторизации: событие шлёт браузер обычного посетителя.
+    if (method === 'POST' && action === 'telemetry') return handleTelemetry(event);
 
     if (method === 'POST' && action === 'upload') return handleUpload(event);
     if (method === 'POST' && action === 'commit') return handleCommit(event);

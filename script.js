@@ -83,6 +83,177 @@ async function apiRequest(path, { method = 'GET', body, admin = false } = {}) {
     return data;
 }
 
+// ─── Телеметрия загрузки ────────────────────────────────────────────────────
+// Меряем первую загрузку по фазам и шлём одним событием в Cloud Function
+// (?action=telemetry). Без неё не отличить «медленный канал до бакета» от
+// «слабое устройство долго разбирает glTF», а жалуются не все.
+// См. docs/perf-loading-plan.md, п. 1.
+//
+// Меряется именно первая загрузка: смена версии в селекторе идёт уже по прогретому
+// кэшу зависимостей и о проблеме холодного старта ничего не говорит.
+
+const TELEMETRY_SCHEMA = 1;
+const TELEMETRY_SLOW_MS = 60000;   // столько ждём конца, потом шлём промежуточное событие
+
+const telemetry = {
+    sid: Math.random().toString(36).slice(2, 10),
+    marks: Object.create(null),
+    glbBytes: 0,
+    sent: false,
+    slowSent: false,
+    disabled: false,               // локальный файл или выключено пользователем
+    slowTimer: null,
+};
+
+// Метка ставится один раз: повторные загрузки не должны переписывать первую.
+function tMark(name) {
+    if (telemetry.marks[name] === undefined) {
+        telemetry.marks[name] = Math.round(performance.now());
+    }
+}
+
+// Длительность фазы. undefined, если загрузка до неё не дошла, — такие поля
+// просто не попадают в событие, и в отчёте видно, где именно всё встало.
+function tSpan(from, to) {
+    const a = telemetry.marks[from];
+    const b = telemetry.marks[to];
+    if (a === undefined || b === undefined) return undefined;
+    return Math.max(0, b - a);
+}
+
+// Зависимости (vendor/* и сама сборка script.<hash>.js) лежат на своём домене,
+// поэтому Resource Timing отдаёт по ним и размеры, и признак попадания в кэш.
+function depsTiming() {
+    let end = 0;
+    let bytes = 0;
+    let cached = 0;
+    let count = 0;
+    for (const entry of performance.getEntriesByType('resource')) {
+        if (!/\/vendor\/|\/script\.[0-9a-f]+\.js(\?|$)/.test(entry.name)) continue;
+        count++;
+        end = Math.max(end, entry.responseEnd);
+        bytes += entry.encodedBodySize || 0;
+        // transferSize === 0 при непустом теле — ответ пришёл из кэша браузера.
+        if (entry.transferSize === 0 && entry.decodedBodySize > 0) cached++;
+    }
+    return { end: count ? Math.round(end) : undefined, bytes, cached, count };
+}
+
+function telemetryPayload(outcome, err) {
+    const nav = performance.getEntriesByType('navigation')[0];
+    const deps = depsTiming();
+    const conn = navigator.connection || {};
+    const versionEl = document.getElementById('app-version');
+    const glbEntry = currentModelPath
+        ? performance.getEntriesByName(currentModelPath).pop()
+        : undefined;
+
+    // html и deps считаем от разметки страницы, остальное — между своими метками.
+    const htmlMs = nav ? Math.round(nav.responseEnd) : undefined;
+    const depsMs = (deps.end !== undefined && htmlMs !== undefined)
+        ? Math.max(0, deps.end - htmlMs)
+        : undefined;
+    const downloadMs = tSpan('glbFirstByte', 'glbDownloaded');
+    const endMark = telemetry.marks.firstFrame ?? Math.round(performance.now());
+
+    const ms = {
+        html: htmlMs,
+        deps: depsMs,
+        catalog: tSpan('catalogStart', 'catalogEnd'),
+        glbWait: tSpan('catalogEnd', 'glbStart'),
+        glbTtfb: tSpan('glbStart', 'glbFirstByte'),
+        glbDownload: downloadMs,
+        glbParse: tSpan('glbDownloaded', 'glbParsed'),
+        firstFrame: tSpan('glbParsed', 'firstFrame'),
+        total: endMark,
+    };
+    for (const key of Object.keys(ms)) {
+        if (ms[key] === undefined) delete ms[key];
+    }
+
+    return {
+        v: TELEMETRY_SCHEMA,
+        sid: telemetry.sid,
+        ts: new Date().toISOString(),
+        app: versionEl ? versionEl.textContent.trim() : '',
+        code: typeof getModelParam === 'function' ? (getModelParam() || '') : '',
+        model: currentModelPath ? currentModelPath.split('/').pop().split('?')[0] : '',
+        outcome,
+        err: err ? String(err).slice(0, 300) : '',
+        ms,
+        glbBytes: telemetry.glbBytes || undefined,
+        // bytes * 8 / ms — это ровно кбит/с, без лишних коэффициентов.
+        glbKbps: (telemetry.glbBytes && downloadMs)
+            ? Math.round(telemetry.glbBytes * 8 / downloadMs)
+            : undefined,
+        glbCached: glbEntry && glbEntry.transferSize === 0 && glbEntry.decodedBodySize > 0
+            ? true : undefined,
+        depsBytes: deps.bytes || undefined,
+        depsCached: deps.cached || undefined,
+        net: {
+            type: conn.effectiveType || '',
+            downlink: conn.downlink,
+            rtt: conn.rtt,
+            save: conn.saveData === true ? true : undefined,
+        },
+        dev: {
+            mem: navigator.deviceMemory,
+            cpu: navigator.hardwareConcurrency,
+            dpr: window.devicePixelRatio,
+            w: window.screen && window.screen.width,
+            h: window.screen && window.screen.height,
+            touch: navigator.maxTouchPoints > 0 ? true : undefined,
+        },
+        ua: navigator.userAgent,
+    };
+}
+
+// outcome: ok | error | notfound | abandoned | slow.
+// Итоговое событие одно на страницу; 'slow' — промежуточное, шлётся отдельно и
+// склеивается с итоговым по sid (загрузка могла и не закончиться никогда).
+function sendTelemetry(outcome, err) {
+    try {
+        if (telemetry.disabled || telemetry.sent) return;
+        if (outcome === 'slow') {
+            if (telemetry.slowSent) return;
+            telemetry.slowSent = true;
+        } else {
+            telemetry.sent = true;
+            if (telemetry.slowTimer) clearTimeout(telemetry.slowTimer);
+        }
+
+        if (!API_BASE_URL || localStorage.getItem('agrTelemetry') === 'off') return;
+
+        const url = `${API_BASE_URL}?action=telemetry`;
+        // text/plain не вызывает preflight, а sendBeacon переживает закрытие вкладки —
+        // именно брошенные загрузки и есть самый интересный случай.
+        const blob = new Blob([JSON.stringify(telemetryPayload(outcome, err))],
+            { type: 'text/plain;charset=UTF-8' });
+
+        if (navigator.sendBeacon && navigator.sendBeacon(url, blob)) return;
+        fetch(url, { method: 'POST', body: blob, keepalive: true }).catch(() => {});
+    } catch (e) {
+        console.warn('Телеметрия не отправлена:', e);
+    }
+}
+
+function initTelemetry() {
+    // Ушёл со страницы, не дождавшись модели, — это и есть жалоба, только молча.
+    const flush = () => {
+        if (!telemetry.sent) sendTelemetry('abandoned');
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flush();
+    });
+}
+
+// Вкладку могут просто оставить висеть — тогда события не будет вовсе.
+function armTelemetrySlowTimer() {
+    if (telemetry.slowTimer || telemetry.disabled) return;
+    telemetry.slowTimer = setTimeout(() => sendTelemetry('slow'), TELEMETRY_SLOW_MS);
+}
+
 // Загрузка списка моделей из Object Storage (прямое чтение models.json)
 async function fetchModels() {
     try {
@@ -95,11 +266,13 @@ async function fetchModels() {
         document.querySelector('.loading').style.display = 'block';
 
         // Параллельно тянем проекты, подпроекты и модели
+        tMark('catalogStart');
         const [projectsData, subprojectsData, modelsData] = await Promise.all([
             fetchProjectsRaw(),
             fetchSubprojectsRaw(),
             fetchModelsRaw(),
         ]);
+        tMark('catalogEnd');
 
         userProjects = ensureUnknownLocally(projectsData);
         userSubprojects = ensureUnknownCommonLocally(subprojectsData);
@@ -504,6 +677,7 @@ function showModelNotFound() {
 
     // Тупик резолвера: модели не будет, значит канал свободен — можно за HDR.
     loadEnvironmentHDR();
+    sendTelemetry('notfound');
 }
 
 // Готовит пользовательский вид для подпроекта: лейбл, селектор версий, коммент.
@@ -2019,6 +2193,9 @@ async function loadModel() {
         
         const isLocalFile = pathToLoad.startsWith('blob:');
 
+        // Свой файл с диска про сеть ничего не говорит — телеметрию для него не шлём.
+        if (isLocalFile) telemetry.disabled = true;
+
         document.querySelector('.loading').textContent = isLocalFile
             ? 'Загрузка пользовательской модели...' 
             : 'Загрузка модели...';
@@ -2040,10 +2217,18 @@ async function loadModel() {
         dracoLoader.setDecoderPath('./vendor/draco/');
         loader.setDRACOLoader(dracoLoader);
         
+        tMark('glbStart');
+        armTelemetrySlowTimer();
+
         const gltf = await loader.loadAsync(pathToLoad, function(xhr) {
             // Игнорируем прогресс устаревшей загрузки, чтобы проценты не «скакали»
             // между двумя параллельными скачиваниями.
             if (loadToken !== currentLoadToken) return;
+            tMark('glbFirstByte');
+            if (xhr.total) {
+                telemetry.glbBytes = xhr.total;
+                if (xhr.loaded >= xhr.total) tMark('glbDownloaded');
+            }
             if (isLocalFile) {
                 const loaded = xhr.loaded / (1024 * 1024);
                 document.querySelector('.loading').textContent = `Загрузка: ${loaded.toFixed(2)} МБ`;
@@ -2052,6 +2237,8 @@ async function loadModel() {
                 document.querySelector('.loading').textContent = `Загрузка GLTF/GLB: ${percent}%`;
             }
         });
+
+        tMark('glbParsed');
 
         // Если пока мы скачивали, стартовала более новая загрузка — эта устарела.
         // Освобождаем ресурсы скачанной модели и выходим, не трогая сцену.
@@ -2183,7 +2370,14 @@ async function loadModel() {
         // Добавляем модель на сцену (с проверками)
         if (scene && model) {
             scene.add(model);
-            
+
+            // Первый кадр с моделью: двойной rAF, чтобы метка встала уже после
+            // того, как кадр отрисован, а не перед ним.
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                tMark('firstFrame');
+                sendTelemetry('ok');
+            }));
+
             // Гарантируем одностороннее отображение всех материалов
             forceFrontSideMaterials();
             
@@ -2278,6 +2472,7 @@ async function loadModel() {
     } catch (error) {
         console.error('Ошибка при загрузке модели:', error);
         document.querySelector('.loading').textContent = 'Ошибка загрузки модели: ' + error.message;
+        sendTelemetry('error', error && error.message);
 
         // Кнопка загрузки модели заменена на кнопку "Поделиться"
     } finally {
@@ -4908,6 +5103,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // Telegram функции авторизации и проверки подписки удалены
     
+    initTelemetry();
+
     // Инициализируем хранилище и дожидаемся загрузки списка моделей,
     // чтобы 3D-сцена инициализировалась уже с готовым списком
     if (initStorage()) {

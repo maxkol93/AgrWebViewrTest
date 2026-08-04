@@ -42,6 +42,11 @@ const force = args.includes('--force');
 // Ключи сайта: деплоятся из репозитория, копировать их между стендами нельзя.
 const SITE_KEYS = new Set(['index.html', 'script.js']);
 
+// Телеметрия у каждого стенда своя: прод-события в деве только мешали бы отчёту.
+const SKIP_PREFIXES = ['telemetry/'];
+
+const isSkipped = (key) => SITE_KEYS.has(key) || SKIP_PREFIXES.some((p) => key.startsWith(p));
+
 // Лимит серверного копирования одним запросом в Object Storage.
 const MAX_COPY_BYTES = 5 * 1024 * 1024 * 1024;
 
@@ -122,7 +127,7 @@ async function main() {
   let tooBig = 0;
 
   for (const [key, meta] of src) {
-    if (SITE_KEYS.has(key)) continue;               // сайт — из репозитория
+    if (isSkipped(key)) continue;                   // сайт и телеметрия — не копируются
     const there = dest.get(key);
     // Совпали размер и ETag — объект уже такой же, копировать незачем.
     if (there && there.size === meta.size && there.etag === meta.etag) {
@@ -140,7 +145,7 @@ async function main() {
   const toDelete = [];
   if (prune) {
     for (const key of dest.keys()) {
-      if (SITE_KEYS.has(key)) continue;             // сайт деву принадлежит свой
+      if (isSkipped(key)) continue;                 // сайт и телеметрия у дева свои
       if (!src.has(key)) toDelete.push(key);
     }
   }

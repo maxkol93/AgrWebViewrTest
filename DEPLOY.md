@@ -255,6 +255,31 @@ git push -u origin dev
 - `POST ?action=upload|commit|delete|update` (заголовок `X-Admin-Token`) — операции с моделями
 - `POST ?action=project-create|project-rename|project-delete` — операции с проектами
 - `POST ?action=subproject-create|subproject-update|subproject-delete` — операции с подпроектами
+- `POST ?action=telemetry` — замеры загрузки от браузера посетителя, **без пароля** (см. ниже)
+
+### Телеметрия загрузки
+
+Сайт один раз за открытие шлёт событие с временем по фазам (index.html →
+зависимости → каталог → скачивание `.glb` → разбор → первый кадр) плюс тип
+соединения и класс устройства. Событие уходит через `sendBeacon`, в том числе
+когда человек закрывает вкладку, не дождавшись модели, — этот случай (`abandoned`)
+и есть та самая жалоба, только молча. Личных данных не сохраняем: ни IP, ни чего
+бы то ни было ещё, что можно связать с человеком. Отключить у себя:
+`localStorage.setItem('agrTelemetry','off')`.
+
+События лежат в бакете отдельными файлами `telemetry/<дата>/*.json` (десятки байт
+каждый) и между стендами не синхронизируются. Отчёт:
+
+```powershell
+. .\deploy\config.dev.ps1          # креды + бакет ДЕВА (для прода — config.local.ps1), VPN ВЫКЛЮЧЕН
+node deploy/telemetry-report.mjs               # последние 7 дней
+node deploy/telemetry-report.mjs --days 1
+node deploy/telemetry-report.mjs --raw > events.json   # выгрузить как есть
+node deploy/telemetry-report.mjs --file events.json    # разбирать потом, бакет не нужен
+```
+
+Когда данных накопится и они больше не нужны — можно удалить старые дни целиком:
+это обычные объекты с префиксом `telemetry/<дата>/`.
 
 ### Импорт каталога проектов/подпроектов (из Excel)
 
