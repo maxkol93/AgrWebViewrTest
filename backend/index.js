@@ -640,6 +640,8 @@ function sanitizeTelemetry(raw) {
     glbBytes: num(src.glbBytes),
     glbKbps: num(src.glbKbps),
     glbCached: src.glbCached === true ? true : undefined,
+    // Время в скрытой вкладке: без него firstFrame/total читаются как поломка сайта.
+    hiddenMs: num(src.hiddenMs),
     depsBytes: num(src.depsBytes),
     depsCached: num(src.depsCached),
     net: {

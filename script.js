@@ -103,7 +103,30 @@ const telemetry = {
     slowSent: false,
     disabled: false,               // локальный файл или выключено пользователем
     slowTimer: null,
+    hiddenMs: 0,                   // сколько вкладка суммарно провела в фоне
+    hiddenSince: null,             // момент ухода в фон, null — вкладка на виду
 };
+
+// В скрытой вкладке браузер не планирует rAF, поэтому метка firstFrame ждёт
+// возврата человека — на практике часами. Считаем время в фоне и шлём его
+// полем hiddenMs: без него «первый кадр» и «ИТОГО» меряют не сайт, а то,
+// когда пользователь вспомнил про вкладку.
+telemetry.hiddenSince = document.visibilityState === 'hidden' ? 0 : null;
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+        if (telemetry.hiddenSince === null) telemetry.hiddenSince = performance.now();
+    } else if (telemetry.hiddenSince !== null) {
+        telemetry.hiddenMs += performance.now() - telemetry.hiddenSince;
+        telemetry.hiddenSince = null;
+    }
+});
+
+// Уход со страницы сам по себе прячет вкладку, и последний отрезок «в фоне»
+// длится доли миллисекунды — событие от этого фоновым не становится.
+function hiddenMsNow() {
+    const pending = telemetry.hiddenSince === null ? 0 : performance.now() - telemetry.hiddenSince;
+    return Math.round(telemetry.hiddenMs + pending);
+}
 
 // Метка ставится один раз: повторные загрузки не должны переписывать первую.
 function tMark(name) {
@@ -202,6 +225,7 @@ function telemetryPayload(outcome, err) {
             : undefined,
         glbCached: glbEntry && glbEntry.transferSize === 0 && glbEntry.decodedBodySize > 0
             ? true : undefined,
+        hiddenMs: hiddenMsNow() || undefined,
         depsBytes: deps.bytes || undefined,
         depsCached: deps.cached || undefined,
         net: {
@@ -5208,6 +5232,7 @@ async function exportModelsTable(btn) {
 function setupAdminExportButton() {
     rebindClick('admin-export-table-btn', (e) => exportModelsTable(e.currentTarget));
 }
+
 // Функция для определения объектов с прозрачными плоскостями (деревья, растительность)
 function detectTransparentBillboards() {
     // Функция отключена

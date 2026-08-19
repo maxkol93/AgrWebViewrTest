@@ -28,6 +28,8 @@ import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/clien
 
 const PREFIX = 'telemetry/';
 const FETCH_CONCURRENCY = 16;
+// Меньше четверти секунды в фоне — это просто уход со страницы, а не фоновая вкладка.
+const BACKGROUND_MS = 250;
 
 // Порядок фаз = порядок в жизни страницы; так читается как водопад.
 const PHASES = [
@@ -68,6 +70,10 @@ const raw = process.argv.includes('--raw');
 const fromFile = argString('--file');
 const onlyTag = argString('--tag');
 const noTag = process.argv.includes('--no-tag');
+
+// Служебные строки при --raw уходят в stderr: stdout там занят самим дампом,
+// иначе `--raw > events.json` даёт файл, который потом не разобрать.
+const note = (...args) => (raw ? console.error(...args) : console.log(...args));
 
 if (!fromFile) {
   for (const [name, value] of Object.entries({ S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY })) {
@@ -151,11 +157,16 @@ function countBy(events, keyFn) {
   return [...map].sort((a, b) => b[1] - a[1]);
 }
 
-function phaseTable(events, title) {
+// Событие «в фоне» — вкладка была скрыта, и rAF там не идёт: фазы до glbParse
+// честные, а firstFrame и total меряют не сайт, а когда человек вернулся.
+const inBackground = (e) => (e.hiddenMs || 0) > BACKGROUND_MS;
+
+function phaseTable(events, title, skip = []) {
   console.log(`\n${title} (${events.length} шт.)`);
   if (!events.length) return;
   console.log(`  ${pad('фаза', 20)}${padL('p50', 10)}${padL('p90', 10)}${padL('max', 10)}${padL('есть данные', 14)}`);
   for (const [key, label] of PHASES) {
+    if (skip.includes(key)) continue;
     const values = events.map((e) => e.ms && e.ms[key]).filter((v) => typeof v === 'number');
     if (!values.length) continue;
     console.log(
@@ -213,8 +224,17 @@ function slowest(events, n) {
   }
 }
 
+// PowerShell 5.1 пишет `node ... > file` в UTF-16LE с BOM, поэтому читаем
+// дамп байтами и смотрим на метку, а не считаем его utf8 вслепую.
+function decodeDump(buf) {
+  if (buf[0] === 0xff && buf[1] === 0xfe) return buf.toString('utf16le', 2);
+  if (buf[0] === 0xfe && buf[1] === 0xff) return Buffer.from(buf).swap16().toString('utf16le', 2);
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.toString('utf8', 3);
+  return buf.toString('utf8');
+}
+
 async function loadFromFile(file) {
-  const parsed = JSON.parse(await readFile(file, 'utf8'));
+  const parsed = JSON.parse(decodeDump(await readFile(file)));
   if (!Array.isArray(parsed)) throw new Error('в файле ожидался массив событий (вывод --raw)');
   return { events: parsed, broken: 0 };
 }
@@ -224,31 +244,31 @@ async function main() {
   let broken;
 
   if (fromFile) {
-    console.log(`→ Файл "${fromFile}" (бакет не нужен)`);
+    note(`→ Файл "${fromFile}" (бакет не нужен)`);
     ({ events, broken } = await loadFromFile(fromFile));
   } else {
     const from = sinceDay(days);
-    console.log(`→ Бакет "${S3_BUCKET}", события с ${from} (последние ${days} дн.)`);
+    note(`→ Бакет "${S3_BUCKET}", события с ${from} (последние ${days} дн.)`);
 
     const keys = await listKeys(from);
     if (!keys.length) {
-      console.log('  Событий нет. Либо телеметрию ещё не деплоили, либо страницу никто не открывал.');
+      note('  Событий нет. Либо телеметрию ещё не деплоили, либо страницу никто не открывал.');
       return;
     }
     ({ events, broken } = await readEvents(keys));
   }
 
   if (!events.length) {
-    console.log('  Событий нет.');
+    note('  Событий нет.');
     return;
   }
-  if (broken) console.log(`  ! не удалось прочитать событий: ${broken}`);
+  if (broken) note(`  ! не удалось прочитать событий: ${broken}`);
 
   // Фильтр по метке применяем и к --raw: дамп «только чужие» бывает нужен чаще отчёта.
   if (onlyTag || noTag) {
     const before = events.length;
     events = events.filter((e) => (onlyTag ? e.tag === onlyTag : !e.tag));
-    console.log(`  фильтр по метке: ${onlyTag ? `tag=${onlyTag}` : 'без метки'}` +
+    note(`  фильтр по метке: ${onlyTag ? `tag=${onlyTag}` : 'без метки'}` +
       ` — осталось ${events.length} из ${before}`);
     if (!events.length) return;
   }
@@ -258,27 +278,40 @@ async function main() {
     return;
   }
 
-  const ok = events.filter((e) => e.outcome === 'ok');
-  const stuck = events.filter((e) => e.outcome === 'abandoned' || e.outcome === 'slow');
+  const background = events.filter(inBackground);
+  const foreground = events.filter((e) => !inBackground(e));
+  const ok = foreground.filter((e) => e.outcome === 'ok');
+  const stuck = foreground.filter((e) => e.outcome === 'abandoned' || e.outcome === 'slow');
 
   console.log(`  событий: ${events.length}, уникальных открытий: ${new Set(events.map((e) => e.sid)).size}`);
   console.log(`  исходы: ${countBy(events, (e) => e.outcome).map(([k, v]) => `${k} ${v}`).join(', ')}`);
   console.log('  «abandoned» — ушли, не дождавшись модели; «slow» — через минуту всё ещё грузилось.');
+  if (background.length) {
+    console.log(`  из них открыты в фоновой вкладке: ${background.length} —` +
+      ' считаются отдельно, «первый кадр» и «ИТОГО» у них не про сайт.');
+  }
+  if (!events.some((e) => e.hiddenMs !== undefined)) {
+    console.log('  ! ни в одном событии нет hiddenMs: это данные до правки,' +
+      ' фоновые вкладки в них неотличимы и завышают «первый кадр» и «ИТОГО».');
+  }
 
   phaseTable(ok, 'Фазы удачных загрузок');
   speedTable(ok);
   phaseTable(stuck, 'Фазы у тех, кто не дождался');
+  phaseTable(background, 'Фазы фоновых вкладок (без «первого кадра» и «ИТОГО»)', ['firstFrame', 'total']);
   breakdown(events, 'По метке браузера («—» = живой пользователь)', (e) => e.tag);
   breakdown(events, 'По типу соединения', (e) => e.net && e.net.type);
   breakdown(events, 'По версии сайта', (e) => e.app);
   breakdown(events, 'По коду модели', (e) => e.code);
-  slowest(events, slowestCount);
+  slowest(foreground, slowestCount);
 
   console.log('\nПодсказки:');
   console.log('  • «пауза до .glb» большая — время уходит до старта скачивания (резолв кода, 300 мс задержки).');
   console.log('  • «.glb скачивание» большое при малой скорости — упирается в канал: помогут CDN (п. 4) и сжатие модели (п. 6).');
   console.log('  • «разбор glTF» и «первый кадр» большие — упирается в устройство, сеть ни при чём.');
   console.log('  • Много «abandoned» с пустыми фазами после .glb — люди уходят прямо на скачивании.');
+  console.log('  • «Фоновые вкладки» — открыли и ушли в другую: браузер там кадры не рисует,');
+  console.log('    так что искать в их «первом кадре» проблему бессмысленно.');
 }
 
 main().catch((err) => {

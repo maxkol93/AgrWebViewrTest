@@ -11,4 +11,9 @@ models-table.xlsx
 node_modules/
 backend/node_modules/
 deploy/node_modules/
+tools/node_modules/
+tools/.work/
 function.zip
+
+# Дампы телеметрии (deploy/telemetry-report.mjs --raw): сырые события, не код.
+telemetry-*.json
