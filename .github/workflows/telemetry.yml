@@ -1,0 +1,85 @@
+name: Telemetry (отчёт по загрузке)
+
+# Отчёт о том, как у людей грузятся модели. Считается на раннере GitHub, а не
+# локально: до storage.yandexcloud.net не достучаться при включённом VPN, а раннер
+# вне РФ — ср. models-table.yml, там ровно та же причина.
+#
+# Читать результат можно прямо в Actions: отчёт печатается в сводку прогона.
+# Сырые события лежат рядом в артефактах — их разбирают уже без бакета:
+#   node deploy/telemetry-report.mjs --file telemetry-prod.json --slowest 30
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "С какого стенда"
+        type: choice
+        options: [prod, dev]
+        default: prod
+      days:
+        description: "За сколько последних дней (3650 — за всё время)"
+        default: "3650"
+      only_users:
+        description: "Только события без метки браузера (живые пользователи, без своих открытий)"
+        type: boolean
+        default: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}   # бакет и ключи берутся из секретов стенда
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Установить зависимости
+        run: npm --prefix deploy install --no-audit --no-fund
+
+      - name: Собрать отчёт
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT: https://storage.yandexcloud.net
+          S3_REGION: ru-central1
+          TARGET: ${{ inputs.target }}
+          DAYS: ${{ inputs.days }}
+        run: |
+          # Кривое число дней иначе молча превратилось бы в 7 (fallback в скрипте).
+          case "$DAYS" in ''|*[!0-9]*) echo "✗ «Дней» должно быть числом, получено: $DAYS"; exit 1;; esac
+
+          DUMP="telemetry-$TARGET.json"
+          FLAGS=""
+          if [ "${{ inputs.only_users }}" = "true" ]; then FLAGS="--no-tag"; fi
+
+          # Сначала дамп (stdout — чистый JSON, служебные строки уходят в stderr),
+          # потом отчёт уже из файла: бакет опрашивается ровно один раз.
+          node deploy/telemetry-report.mjs --raw --days "$DAYS" $FLAGS > "$DUMP"
+
+          if [ -s "$DUMP" ]; then
+            node deploy/telemetry-report.mjs --file "$DUMP" --slowest 20 | tee report.txt
+          else
+            # Пустой дамп — событий за период нет; артефакт всё равно должен быть валидным.
+            echo "Событий нет: за последние $DAYS дн. на стенде $TARGET никто не открывал страницу." | tee report.txt
+            echo '[]' > "$DUMP"
+          fi
+
+          {
+            echo "### Телеметрия: $TARGET, за $DAYS дн."
+            echo ''
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Положить события и отчёт в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-${{ inputs.target }}
+          path: |
+            telemetry-*.json
+            report.txt
+          if-no-files-found: error
+          retention-days: 30
