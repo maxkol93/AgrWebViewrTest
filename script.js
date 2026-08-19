@@ -92,7 +92,7 @@ async function apiRequest(path, { method = 'GET', body, admin = false } = {}) {
 // Меряется именно первая загрузка: смена версии в селекторе идёт уже по прогретому
 // кэшу зависимостей и о проблеме холодного старта ничего не говорит.
 
-const TELEMETRY_SCHEMA = 1;
+const TELEMETRY_SCHEMA = 2;   // 2 — появилось поле hiddenMs (время вкладки в фоне)
 const TELEMETRY_SLOW_MS = 60000;   // столько ждём конца, потом шлём промежуточное событие
 
 const telemetry = {
