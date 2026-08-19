@@ -12,10 +12,6 @@ on:
         type: choice
         options: [prod, dev]
         default: prod
-      diff:
-        description: "Подсветить изменения относительно models-table.xlsx из репозитория"
-        type: boolean
-        default: true
       publish_order:
         description: "Обновить table-order.json в бакете (порядок строк для кнопки в админке)"
         type: boolean
@@ -43,8 +39,8 @@ jobs:
           S3_ENDPOINT: https://storage.yandexcloud.net
           S3_REGION: ru-central1
         run: |
+          # Подсветки тут нет: models-tables/ в .gitignore, прошлых выгрузок на раннере нет.
           FLAGS="--out models-table-new.xlsx"
-          if [ "${{ inputs.diff }}" = "true" ]; then FLAGS="$FLAGS --diff models-table.xlsx"; fi
           if [ "${{ inputs.publish_order }}" != "true" ]; then FLAGS="$FLAGS --no-order"; fi
           echo "Стенд: ${{ inputs.target }}"
           echo "Запуск: node deploy/models-table.mjs $FLAGS"

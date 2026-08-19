@@ -1,8 +1,11 @@
 // Сборка таблицы «код СУИП → модели» в файл .xlsx (без авторизации в Google).
 //
 // Колонки: код СУИП / ПРОЕКТ / ОЧЕРЕДЬ\ЭТАП / МОДЕЛЬ (да-нет) / ССЫЛКА / ССЫЛКА (ДЕВ) /
-// ДАТА / КОРОТКОЕ ИМЯ / КОММЕНТАРИЙ / ФАЙЛ. Несколько версий модели у одного этапа —
-// несколько строк подряд (сверху свежая). Модели проекта Unknown — блоком в самом низу.
+// ДАТА / ЗАГРУЖЕНО / КОРОТКОЕ ИМЯ / КОММЕНТАРИЙ / ФАЙЛ. Несколько версий модели у одного
+// этапа — несколько строк подряд (сверху свежая). Модели Unknown — блоком в самом низу.
+//
+// «ДАТА» — это modelDate, её правят руками, и она про съёмку, а не про загрузку.
+// «ЗАГРУЖЕНО» — uploadedAt, ставится бэкендом при коммите модели и руками не меняется.
 //
 // «ССЫЛКА (ДЕВ)» считается по отдельному чтению дев-бакета: там моделей меньше, поэтому
 // ссылка ставится, только если код на деве реально есть (в т.ч. когда на проде модели нет).
@@ -18,21 +21,26 @@
 //   SITE_BASE_URL   (опц.) — база ссылок, по умолчанию https://<бакет>.website.yandexcloud.net/
 //   DEV_S3_BUCKET / DEV_SITE_BASE_URL (опц.) — дев-стенд, по умолчанию <бакет>-dev
 //
+// Каждый прогон кладёт свой файл в models-tables/ (models-table_ДД.ММ.ГГГГ.xlsx), старые
+// остаются для истории. Папка в .gitignore — это выгрузки, а не код.
+//
 // Запуск:
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --out C:\temp\модели.xlsx
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --no-dev   # без колонки дева
 //
-// --diff <старая.xlsx> подсвечивает изменения относительно прошлой выгрузки: зелёным —
-// новые строки (новый код или новая версия модели), жёлтым — строки, у которых поменялись
-// проект/этап/дата/имя/комментарий. Строку опознаём по паре «код СУИП + ФАЙЛ».
-//   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff models-table.xlsx --out models-table-new.xlsx
+// --diff подсвечивает изменения относительно прошлой выгрузки: зелёным — новые строки
+// (новый код или новая версия модели), жёлтым — строки, у которых поменялись проект,
+// этап, дата, загрузка, имя или комментарий. Строку опознаём по паре «код СУИП + ФАЙЛ».
+// Без пути берётся самый свежий файл из models-tables/; можно указать конкретный.
+//   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff
+//   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff models-tables/models-table_04.08.2026.xlsx
 //
 // Каждый прогон кладёт в бакет table-order.json (порядок кодов + базы ссылок): из него
 // кнопка «Выгрузить таблицу» в админке собирает такую же таблицу прямо в браузере.
 // Отключается флагом --no-order.
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -47,9 +55,12 @@ const UNKNOWN_PROJECT_ID = 'unknown';
 // Первые три колонки — исходный каталог, дальше наши.
 export const HEADER = [
   'код СУИП', 'ПРОЕКТ', 'ОЧЕРЕДЬ\\ЭТАП',
-  'МОДЕЛЬ', 'ССЫЛКА', 'ССЫЛКА (ДЕВ)', 'ДАТА', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ', 'ФАЙЛ',
+  'МОДЕЛЬ', 'ССЫЛКА', 'ССЫЛКА (ДЕВ)', 'ДАТА', 'ЗАГРУЖЕНО', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ', 'ФАЙЛ',
 ];
-const COL_WIDTHS = [12, 24, 34, 9, 46, 46, 12, 34, 40, 30];
+const COL_WIDTHS = [12, 24, 34, 9, 46, 46, 12, 13, 34, 40, 30];
+
+// Куда складываются выгрузки: файл на каждый прогон, старые остаются для истории.
+const HISTORY_DIR = 'models-tables';
 
 // ─────────────────────────────── чтение бакета ───────────────────────────────
 
@@ -232,6 +243,14 @@ function isoDate(model) {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
 }
 
+// «ДАТА» правится руками и часто отражает не загрузку, а состояние съёмки, поэтому
+// момент появления модели в сервисе живёт отдельной колонкой. uploadedAt проставляет
+// бэкенд при коммите и правки модели его не трогают — колонка полностью автоматическая.
+function uploadedDate(model) {
+  const m = String(model.uploadedAt || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+
 function shortName(model) {
   const base = model.displayName || model.name || '';
   return model.versionName ? `${base} — ${model.versionName}` : base;
@@ -314,9 +333,9 @@ export function buildRows({ projects, subprojects, models }, existingCodeOrder, 
     const head = [String(sub.code), projectName, sub.isCommon ? 'Common' : sub.name];
     const onDev = devLink(sub.code);
     if (onDev) devCodesUsed.add(String(sub.code));
-    if (list.length === 0) return [[...head, 'нет', '', onDev, '', '', '', '']];
+    if (list.length === 0) return [[...head, 'нет', '', onDev, '', '', '', '', '']];
     return list.map((m) => [
-      ...head, 'да', link(sub.code), onDev, isoDate(m), shortName(m), m.comment || '', m.name || '',
+      ...head, 'да', link(sub.code), onDev, isoDate(m), uploadedDate(m), shortName(m), m.comment || '', m.name || '',
     ]);
   };
 
@@ -336,7 +355,7 @@ export function buildRows({ projects, subprojects, models }, existingCodeOrder, 
     bottom.push(...rowsForSub(sub, 'Unknown'));
   }
   for (const m of orphans) {
-    bottom.push(['', 'Unknown', '(подпроект удалён)', 'да', '', '', isoDate(m), shortName(m), m.comment || '', m.name || '']);
+    bottom.push(['', 'Unknown', '(подпроект удалён)', 'да', '', '', isoDate(m), uploadedDate(m), shortName(m), m.comment || '', m.name || '']);
   }
   if (bottom.length) {
     rows.push(new Array(HEADER.length).fill(''));
@@ -458,7 +477,8 @@ function dateSerial(iso) {
   return Number.isFinite(days) ? days : null;
 }
 
-const DATE_COL = HEADER.indexOf('ДАТА');
+export const DATE_HEADERS = ['ДАТА', 'ЗАГРУЖЕНО'];
+const DATE_COLS = new Set(DATE_HEADERS.map((h) => HEADER.indexOf(h)));
 export const LAST_COL = colName(HEADER.length - 1);
 
 // Базовые стили: 0 — обычный, 1 — шапка, 2 — дата, 3 — ссылка. Подсветка добавляет
@@ -486,7 +506,7 @@ export function buildXlsx(rows, sheetName = 'Модели', marks = null) {
       // Пустые ячейки подсвеченной строки всё равно печатаем — иначе заливка рвётся.
       if (raw === '') { if (mark) cells.push(`<c r="${ref}"${attrS(styleFor(0, mark))}/>`); continue; }
       if (r === 0) { cells.push(`<c r="${ref}" s="1" t="inlineStr"><is><t>${esc(raw)}</t></is></c>`); continue; }
-      if (c === DATE_COL) {
+      if (DATE_COLS.has(c)) {
         const serial = dateSerial(raw);
         if (serial !== null) { cells.push(`<c r="${ref}"${attrS(styleFor(2, mark))}><v>${serial}</v></c>`); continue; }
       }
@@ -661,8 +681,9 @@ export async function readXlsxRows(file) {
   }
   // Дату в .xlsx хранит число, а стиль ячейки зависит от подсветки — поэтому колонку
   // ищем по шапке, а не по номеру стиля.
-  const dateCol = (rows[0] || []).findIndex((h) => String(h ?? '').trim() === 'ДАТА');
-  if (dateCol !== -1) {
+  for (const title of DATE_HEADERS) {
+    const dateCol = (rows[0] || []).findIndex((h) => String(h ?? '').trim() === title);
+    if (dateCol === -1) continue;
     for (let r = 1; r < rows.length; r += 1) {
       if (numeric[r].has(dateCol) && rows[r][dateCol] !== '') rows[r][dateCol] = serialToIso(rows[r][dateCol]);
     }
@@ -673,7 +694,9 @@ export async function readXlsxRows(file) {
 // Строку опознаём по паре «код + имя файла»: у одного этапа бывает несколько версий,
 // а код без файла (МОДЕЛЬ = «нет») — тоже нормальная строка со своим ключом.
 const DIFF_KEY = ['код СУИП', 'ФАЙЛ'];
-const DIFF_CMP = ['ПРОЕКТ', 'ОЧЕРЕДЬ\ЭТАП', 'МОДЕЛЬ', 'ДАТА', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ'];
+// Имя колонки содержит обратный слеш — его надо экранировать, иначе строка теряет слеш,
+// не совпадает с HEADER и колонка тихо выпадает из сравнения.
+const DIFF_CMP = ['ПРОЕКТ', 'ОЧЕРЕДЬ\\ЭТАП', 'МОДЕЛЬ', 'ДАТА', 'ЗАГРУЖЕНО', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ'];
 
 function rowKey(row, pick) {
   return DIFF_KEY.map((name) => String(pick(row, name) ?? '').trim()).join('\u0000');
@@ -692,6 +715,11 @@ export function markChanges(newRows, oldRows) {
   const marks = new Map();
   const stats = { added: 0, changed: 0, newCodes: [], skipped: !oldHead.includes('код СУИП') };
   if (stats.skipped) return { marks, stats };
+
+  // Прошлая выгрузка могла быть собрана до появления какой-то колонки (так пришла
+  // «ЗАГРУЖЕНО»): сравниваем только то, что есть в обеих шапках, иначе пожелтеет всё.
+  const compare = DIFF_CMP.filter((name) => oldHead.includes(name) && HEADER.includes(name));
+  stats.skippedColumns = DIFF_CMP.filter((name) => !compare.includes(name));
 
   // У одного кода бывает несколько версий с одинаковым именем файла, поэтому под ключом
   // держим список: строка считается неизменной, если совпала хоть с одной старой.
@@ -723,11 +751,47 @@ export function markChanges(newRows, oldRows) {
       }
       continue;
     }
-    const same = prev.some((old) => DIFF_CMP.every((name) => String(newPick(row, name) ?? '').trim()
+    const same = prev.some((old) => compare.every((name) => String(newPick(row, name) ?? '').trim()
       === String(oldPick(old, name) ?? '').trim()));
     if (!same) { marks.set(r, 'changed'); stats.changed += 1; }
   }
   return { marks, stats };
+}
+
+// ────────────────────────── история выгрузок на диске ────────────────────────
+
+/** Путь файла для сегодняшнего прогона: models-tables/models-table_ДД.ММ.ГГГГ.xlsx */
+function defaultOutPath(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()}`;
+  return path.join(root, HISTORY_DIR, `models-table_${stamp}.xlsx`);
+}
+
+/**
+ * Самая свежая прошлая выгрузка — для `--diff` без явного файла. Сортируем по времени
+ * изменения, а не по имени: в имени дата в формате ДД.ММ.ГГГГ, лексикографически она врёт.
+ *
+ * @returns {Promise<string|null>}
+ */
+async function latestHistoryFile(exclude) {
+  const dir = path.join(root, HISTORY_DIR);
+  let names;
+  try {
+    names = await readdir(dir);
+  } catch {
+    return null;
+  }
+  const skip = exclude ? path.resolve(exclude) : '';
+  const candidates = [];
+  for (const name of names) {
+    if (!/\.xlsx$/i.test(name) || name.startsWith('~$')) continue; // ~$ — временные файлы Excel
+    const full = path.join(dir, name);
+    if (path.resolve(full) === skip) continue;
+    candidates.push({ full, mtime: (await stat(full)).mtimeMs });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.mtime - a.mtime);
+  return candidates[0].full;
 }
 
 // ─────────────────────────────────── CLI ─────────────────────────────────────
@@ -747,13 +811,17 @@ export async function exportXlsx(opts = {}) {
   const order = opts.order || await fetchSheetOrder(sheetId);
 
   const { rows, stats, dropped } = buildRows(data, order, siteBase, dev);
-  const outPath = path.resolve(opts.out || path.join(root, 'models-table.xlsx'));
+  const outPath = path.resolve(opts.out || defaultOutPath());
 
   // Подсветка «что нового с прошлой выгрузки» — разовая: сравнение идёт с указанным .xlsx.
   let marks = null;
   let diffStats = null;
-  if (opts.diff) {
-    const diffPath = path.resolve(opts.diff);
+  const diffSource = opts.diff === true ? await latestHistoryFile(outPath) : opts.diff;
+  if (opts.diff && !diffSource) {
+    console.warn(`⚠ В ${HISTORY_DIR}/ нет прошлых выгрузок — сравнивать не с чем, подсветки не будет.`);
+  }
+  if (diffSource) {
+    const diffPath = path.resolve(diffSource);
     try {
       const result = markChanges(rows, await readXlsxRows(diffPath));
       marks = result.marks;
@@ -765,6 +833,7 @@ export async function exportXlsx(opts = {}) {
     }
   }
 
+  await mkdir(path.dirname(outPath), { recursive: true });
   await writeFile(outPath, buildXlsx(rows, 'Модели', marks));
 
   console.log(`Строк: ${stats.dataRows} (с моделью ${stats.withModel}, в блоке «без проекта» ${stats.unknownRows})`);
@@ -773,7 +842,8 @@ export async function exportXlsx(opts = {}) {
   if (stats.addedCodes.length) console.log(`  новых кодов: ${stats.addedCodes.length} (${stats.addedCodes.slice(0, 10).join(', ')}${stats.addedCodes.length > 10 ? ', …' : ''})`);
   if (dropped.length) console.log(`  нет в сервисе, из таблицы убраны: ${dropped.length} (${dropped.slice(0, 10).join(', ')}${dropped.length > 10 ? ', …' : ''})`);
   if (diffStats && !diffStats.skipped) {
-    console.log(`Подсветка (сравнение с ${path.basename(opts.diff)}): зелёных (новых) ${diffStats.added}, жёлтых (изменившихся) ${diffStats.changed}`);
+    console.log(`Подсветка (сравнение с ${path.basename(diffSource)}): зелёных (новых) ${diffStats.added}, жёлтых (изменившихся) ${diffStats.changed}`);
+    if (diffStats.skippedColumns?.length) console.log(`  колонок не было в прошлой выгрузке, не сравнивались: ${diffStats.skippedColumns.join(', ')}`);
     if (diffStats.newCodes.length) console.log(`  кодов, которых раньше не было: ${diffStats.newCodes.length} (${diffStats.newCodes.slice(0, 10).join(', ')}${diffStats.newCodes.length > 10 ? ', …' : ''})`);
   }
   console.log(`✓ Файл: ${outPath}`);
@@ -792,6 +862,11 @@ export async function exportXlsx(opts = {}) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
+  // `--diff` без пути — сравнить с последней выгрузкой в models-tables/.
+  const diffArg = argValue(args, '--diff');
+  const diff = args.includes('--diff')
+    ? (diffArg && !diffArg.startsWith('--') ? diffArg : true)
+    : undefined;
   exportXlsx({
     out: argValue(args, '--out'),
     sheetId: argValue(args, '--sheet'),
@@ -799,7 +874,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     devBucket: argValue(args, '--dev-bucket'),
     devSite: argValue(args, '--dev-site'),
     noDev: args.includes('--no-dev'),
-    diff: argValue(args, '--diff'),
+    diff,
     noOrder: args.includes('--no-order'),
   }).catch((err) => {
     console.error('✗ Ошибка сборки таблицы:', err.message || err);

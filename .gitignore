@@ -5,7 +5,8 @@ deploy/dev-stand.out.json
 sa-key.json
 deploy/google-key.json
 deploy/sheet-backup.json
-models-table.xlsx
+# Выгрузки таблицы моделей: история прогонов, не код
+models-tables/
 
 # Зависимости и артефакты
 node_modules/

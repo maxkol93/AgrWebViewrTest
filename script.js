@@ -4824,10 +4824,10 @@ const TABLE_ORDER_KEY = 'table-order.json';
 const TABLE_SEPARATOR = '— Модели без проекта —';
 const TABLE_HEADER = [
     'код СУИП', 'ПРОЕКТ', 'ОЧЕРЕДЬ\\ЭТАП',
-    'МОДЕЛЬ', 'ССЫЛКА', 'ССЫЛКА (ДЕВ)', 'ДАТА', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ', 'ФАЙЛ',
+    'МОДЕЛЬ', 'ССЫЛКА', 'ССЫЛКА (ДЕВ)', 'ДАТА', 'ЗАГРУЖЕНО', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ', 'ФАЙЛ',
 ];
-const TABLE_COL_WIDTHS = [12, 24, 34, 9, 46, 46, 12, 34, 40, 30];
-const TABLE_DATE_COL = TABLE_HEADER.indexOf('ДАТА');
+const TABLE_COL_WIDTHS = [12, 24, 34, 9, 46, 46, 12, 13, 34, 40, 30];
+const TABLE_DATE_COLS = new Set(['ДАТА', 'ЗАГРУЖЕНО'].map((h) => TABLE_HEADER.indexOf(h)));
 
 /** Имя бакета — последний сегмент публичного префикса хранилища. */
 function storageBucketName(base) {
@@ -4885,6 +4885,14 @@ async function fetchDevStandCodes() {
 
 function tableIsoDate(model) {
     const m = String(model.modelDate || model.uploadedAt || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+
+// «ДАТА» правится руками и часто отражает не загрузку, а состояние съёмки, поэтому момент
+// появления модели в сервисе живёт отдельной колонкой. uploadedAt ставит бэкенд при коммите
+// и правки модели его не трогают — колонка полностью автоматическая.
+function tableUploadedDate(model) {
+    const m = String(model.uploadedAt || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
     return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
 }
 
@@ -4952,9 +4960,10 @@ function buildModelsTableRows(orderCodes, siteBase, dev) {
         const list = sortedModels(modelsBySub.get(sub.id) || []);
         const head = [String(sub.code), projectName, sub.isCommon ? COMMON_NAME : sub.name];
         const onDev = devLink(sub.code);
-        if (list.length === 0) return [[...head, 'нет', '', onDev, '', '', '', '']];
+        if (list.length === 0) return [[...head, 'нет', '', onDev, '', '', '', '', '']];
         return list.map((m) => [
-            ...head, 'да', link(sub.code), onDev, tableIsoDate(m), tableShortName(m), m.comment || '', m.name || '',
+            ...head, 'да', link(sub.code), onDev, tableIsoDate(m), tableUploadedDate(m),
+            tableShortName(m), m.comment || '', m.name || '',
         ]);
     };
 
@@ -4974,7 +4983,8 @@ function buildModelsTableRows(orderCodes, siteBase, dev) {
         bottom.push(...rowsForSub(sub, UNKNOWN_PROJECT_NAME));
     });
     orphans.forEach((m) => {
-        bottom.push(['', UNKNOWN_PROJECT_NAME, '(подпроект удалён)', 'да', '', '', tableIsoDate(m), tableShortName(m), m.comment || '', m.name || '']);
+        bottom.push(['', UNKNOWN_PROJECT_NAME, '(подпроект удалён)', 'да', '', '',
+            tableIsoDate(m), tableUploadedDate(m), tableShortName(m), m.comment || '', m.name || '']);
     });
     if (bottom.length) {
         rows.push(new Array(TABLE_HEADER.length).fill(''));
@@ -5101,7 +5111,7 @@ async function buildModelsTableXlsx(rows, sheetName = 'Модели') {
             if (raw === '') continue;
             const ref = `${tableColName(c)}${r + 1}`;
             if (r === 0) { cells.push(`<c r="${ref}" s="1" t="inlineStr"><is><t>${tableEsc(raw)}</t></is></c>`); continue; }
-            if (c === TABLE_DATE_COL) {
+            if (TABLE_DATE_COLS.has(c)) {
                 const serial = tableDateSerial(raw);
                 if (serial !== null) { cells.push(`<c r="${ref}" s="2"><v>${serial}</v></c>`); continue; }
             }
