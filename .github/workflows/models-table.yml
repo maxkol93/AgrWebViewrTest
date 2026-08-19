@@ -1,0 +1,59 @@
+name: Models table (.xlsx)
+
+# Сводка «какие модели есть в сервисе» — собирается на раннере GitHub, а не локально:
+# у нас до storage.yandexcloud.net не достучаться при включённом VPN, а раннер вне РФ.
+# Готовый файл лежит в артефактах прогона, порядок строк уезжает в бакет
+# (table-order.json) — из него кнопка «Выгрузить таблицу» в админке берёт раскладку.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "С какого стенда собирать"
+        type: choice
+        options: [prod, dev]
+        default: prod
+      diff:
+        description: "Подсветить изменения относительно models-table.xlsx из репозитория"
+        type: boolean
+        default: true
+      publish_order:
+        description: "Обновить table-order.json в бакете (порядок строк для кнопки в админке)"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}   # бакет и ключи берутся из секретов стенда
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Установить зависимости
+        run: npm --prefix deploy install --no-audit --no-fund
+
+      - name: Собрать таблицу
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT: https://storage.yandexcloud.net
+          S3_REGION: ru-central1
+        run: |
+          FLAGS="--out models-table-new.xlsx"
+          if [ "${{ inputs.diff }}" = "true" ]; then FLAGS="$FLAGS --diff models-table.xlsx"; fi
+          if [ "${{ inputs.publish_order }}" != "true" ]; then FLAGS="$FLAGS --no-order"; fi
+          echo "Стенд: ${{ inputs.target }}"
+          echo "Запуск: node deploy/models-table.mjs $FLAGS"
+          node deploy/models-table.mjs $FLAGS
+
+      - name: Положить файл в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: models-table-${{ inputs.target }}
+          path: models-table-new.xlsx
+          if-no-files-found: error
+          retention-days: 30

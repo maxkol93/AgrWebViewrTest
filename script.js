@@ -4390,6 +4390,7 @@ async function openAdminPanel() {
     setupAdminUploadButton();
     setupAdminModelSearch();
     setupAdminCreateProject();
+    setupAdminExportButton();
     renderAdminModels();
     renderAdminCatalog();
     openModal('admin-modal');
@@ -4787,6 +4788,426 @@ function forceFrontSideMaterials() {
     });
 }
 
+// ─── Выгрузка таблицы моделей в .xlsx ───────────────────────────────────────
+// Браузерная копия deploy/models-table.mjs (эталон там же): те же колонки, тот же
+// порядок строк, тот же формат файла. Меняешь колонки или правила — правь оба места.
+//
+// Порядок строк держит Google-таблица, но её CSV-экспорт не отдаёт CORS, поэтому
+// из браузера он недоступен. Скрипт при каждом прогоне кладёт в бакет table-order.json
+// со списком кодов — кнопка читает его. Нет файла — раскладываем по каталогу.
+
+const TABLE_ORDER_KEY = 'table-order.json';
+const TABLE_SEPARATOR = '— Модели без проекта —';
+const TABLE_HEADER = [
+    'код СУИП', 'ПРОЕКТ', 'ОЧЕРЕДЬ\\ЭТАП',
+    'МОДЕЛЬ', 'ССЫЛКА', 'ССЫЛКА (ДЕВ)', 'ДАТА', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ', 'ФАЙЛ',
+];
+const TABLE_COL_WIDTHS = [12, 24, 34, 9, 46, 46, 12, 34, 40, 30];
+const TABLE_DATE_COL = TABLE_HEADER.indexOf('ДАТА');
+
+/** Имя бакета — последний сегмент публичного префикса хранилища. */
+function storageBucketName(base) {
+    const m = String(base || '').replace(/\/+$/, '').match(/\/([^/]+)$/);
+    return m ? m[1] : '';
+}
+
+function websiteBaseFor(bucket) {
+    return bucket ? `https://${bucket}.website.yandexcloud.net/` : '';
+}
+
+async function fetchJsonFromStorage(base, key) {
+    const res = await fetch(`${base}/${key}?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+}
+
+/** Порядок кодов из table-order.json; нет файла — пустой список и порядок каталога. */
+async function fetchTableOrder() {
+    try {
+        const data = await fetchJsonFromStorage(STORAGE_BASE_URL, TABLE_ORDER_KEY);
+        const codes = Array.isArray(data && data.codes) ? data.codes.map((c) => String(c).trim()) : [];
+        return { codes, siteBase: data.siteBase || '', devSiteBase: data.devSiteBase || '', updatedAt: data.updatedAt || '' };
+    } catch (e) {
+        console.warn(`table-order.json не прочитан (${e.message}) — порядок строк возьмём из каталога.`);
+        return { codes: [], siteBase: '', devSiteBase: '', updatedAt: '' };
+    }
+}
+
+/**
+ * Коды подпроектов, у которых на соседнем (дев) стенде реально есть модель.
+ * На деве моделей меньше, поэтому ссылка не должна вести в пустоту.
+ */
+async function fetchDevStandCodes() {
+    const bucket = storageBucketName(STORAGE_BASE_URL);
+    if (!bucket || /-dev$/.test(bucket)) return null; // сами на деве — колонку не заполняем
+    const devBase = `${STORAGE_BASE_URL.replace(/\/+$/, '')}-dev`;
+    try {
+        const [subprojects, models] = await Promise.all([
+            fetchJsonFromStorage(devBase, 'subprojects.json'),
+            fetchJsonFromStorage(devBase, 'models.json'),
+        ]);
+        const byId = new Map((subprojects || []).map((s) => [s.id, s]));
+        const codes = new Set();
+        (models || []).forEach((m) => {
+            const sub = byId.get(m.subprojectId);
+            if (sub && sub.code) codes.add(String(sub.code));
+        });
+        return { codes, base: websiteBaseFor(`${bucket}-dev`) };
+    } catch (e) {
+        console.warn(`Дев-стенд не прочитан (${e.message}) — колонка «ССЫЛКА (ДЕВ)» будет пустой.`);
+        return null;
+    }
+}
+
+function tableIsoDate(model) {
+    const m = String(model.modelDate || model.uploadedAt || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+
+function tableShortName(model) {
+    const base = model.displayName || model.name || '';
+    return model.versionName ? `${base} — ${model.versionName}` : base;
+}
+
+/** Строит содержимое листа: [шапка, ...строки]. Зеркало buildRows из deploy/models-table.mjs. */
+function buildModelsTableRows(orderCodes, siteBase, dev) {
+    const projects = userProjects || [];
+    const subprojects = userSubprojects || [];
+    const models = userModels || [];
+
+    const projectById = new Map(projects.map((p) => [p.id, p]));
+    const subById = new Map(subprojects.map((s) => [s.id, s]));
+
+    const modelsBySub = new Map();
+    const orphans = [];
+    models.forEach((m) => {
+        if (!subById.has(m.subprojectId)) { orphans.push(m); return; }
+        if (!modelsBySub.has(m.subprojectId)) modelsBySub.set(m.subprojectId, []);
+        modelsBySub.get(m.subprojectId).push(m);
+    });
+
+    // Пустой Common есть у каждого проекта по умолчанию — таблицу он не засоряет.
+    const catalogSubs = subprojects.filter((s) => s.projectId !== UNKNOWN_PROJECT_ID
+        && (!s.isCommon || (modelsBySub.get(s.id) || []).length > 0));
+    const unknownSubs = subprojects.filter((s) => s.projectId === UNKNOWN_PROJECT_ID);
+    const subByCode = new Map(catalogSubs.map((s) => [String(s.code), s]));
+
+    // 1) коды из сохранённого порядка — как были; 2) новые — в конец блока своего проекта
+    const ordered = [];
+    const placed = new Set();
+    (orderCodes || []).forEach((code) => {
+        const key = String(code);
+        if (!key || placed.has(key)) return;
+        const sub = subByCode.get(key);
+        if (!sub) return;
+        ordered.push(sub);
+        placed.add(key);
+    });
+    const added = [];
+    catalogSubs.forEach((sub) => {
+        if (placed.has(String(sub.code))) return;
+        let insertAt = -1;
+        for (let i = ordered.length - 1; i >= 0; i -= 1) {
+            if (ordered[i].projectId === sub.projectId) { insertAt = i + 1; break; }
+        }
+        if (insertAt === -1) ordered.push(sub); else ordered.splice(insertAt, 0, sub);
+        placed.add(String(sub.code));
+        added.push(String(sub.code));
+    });
+
+    const link = (code) => `${siteBase}?model=${encodeURIComponent(code)}`;
+    const devLink = (code) => (dev && dev.codes.has(String(code))
+        ? `${dev.base}?model=${encodeURIComponent(code)}` : '');
+
+    const sortedModels = (list) => [...list].sort((a, b) => {
+        const d = String(b.modelDate || '').localeCompare(String(a.modelDate || ''));
+        return d !== 0 ? d : String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || ''));
+    });
+
+    const rowsForSub = (sub, projectName) => {
+        const list = sortedModels(modelsBySub.get(sub.id) || []);
+        const head = [String(sub.code), projectName, sub.isCommon ? COMMON_NAME : sub.name];
+        const onDev = devLink(sub.code);
+        if (list.length === 0) return [[...head, 'нет', '', onDev, '', '', '', '']];
+        return list.map((m) => [
+            ...head, 'да', link(sub.code), onDev, tableIsoDate(m), tableShortName(m), m.comment || '', m.name || '',
+        ]);
+    };
+
+    const rows = [TABLE_HEADER];
+    let withModel = 0;
+    ordered.forEach((sub) => {
+        const project = projectById.get(sub.projectId);
+        const subRows = rowsForSub(sub, project ? project.name : '');
+        if (subRows[0][3] === 'да') withModel += subRows.length;
+        rows.push(...subRows);
+    });
+
+    // Низ таблицы: модели без проекта
+    const bottom = [];
+    unknownSubs.forEach((sub) => {
+        if (!(modelsBySub.get(sub.id) || []).length) return;
+        bottom.push(...rowsForSub(sub, UNKNOWN_PROJECT_NAME));
+    });
+    orphans.forEach((m) => {
+        bottom.push(['', UNKNOWN_PROJECT_NAME, '(подпроект удалён)', 'да', '', '', tableIsoDate(m), tableShortName(m), m.comment || '', m.name || '']);
+    });
+    if (bottom.length) {
+        rows.push(new Array(TABLE_HEADER.length).fill(''));
+        rows.push([TABLE_SEPARATOR, ...new Array(TABLE_HEADER.length - 1).fill('')]);
+        rows.push(...bottom);
+        withModel += bottom.length;
+    }
+
+    return { rows, stats: { dataRows: rows.length - 1, withModel, added, unknownRows: bottom.length } };
+}
+
+// ── сборка .xlsx: минимальный OOXML, тот же, что пишет deploy/models-table.mjs ──
+
+const TABLE_CRC_TABLE = (() => {
+    const table = new Int32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+        let c = i;
+        for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        table[i] = c;
+    }
+    return table;
+})();
+
+function tableCrc32(bytes) {
+    let c = -1;
+    for (let i = 0; i < bytes.length; i += 1) c = TABLE_CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ -1) >>> 0;
+}
+
+/** deflate-raw, если браузер умеет (Chrome умеет); иначе кладём без сжатия. */
+async function tableDeflate(bytes) {
+    if (typeof CompressionStream !== 'function') return { data: bytes, method: 0 };
+    try {
+        const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+        return { data: new Uint8Array(await new Response(stream).arrayBuffer()), method: 8 };
+    } catch (e) {
+        return { data: bytes, method: 0 };
+    }
+}
+
+async function tableZip(files) {
+    const encoder = new TextEncoder();
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    for (const file of files) {
+        const nameBytes = encoder.encode(file.name);
+        const body = encoder.encode(file.data);
+        const { data, method } = await tableDeflate(body);
+        const crc = tableCrc32(body);
+
+        const local = new DataView(new ArrayBuffer(30));
+        local.setUint32(0, 0x04034b50, true);
+        local.setUint16(4, 20, true);
+        local.setUint16(6, 0x0800, true); // имена в UTF-8
+        local.setUint16(8, method, true);
+        local.setUint16(12, 0x21, true);  // фиксированная дата — файл воспроизводим
+        local.setUint32(14, crc, true);
+        local.setUint32(18, data.length, true);
+        local.setUint32(22, body.length, true);
+        local.setUint16(26, nameBytes.length, true);
+        chunks.push(new Uint8Array(local.buffer), nameBytes, data);
+
+        const dir = new DataView(new ArrayBuffer(46));
+        dir.setUint32(0, 0x02014b50, true);
+        dir.setUint16(4, 20, true);
+        dir.setUint16(6, 20, true);
+        dir.setUint16(8, 0x0800, true);
+        dir.setUint16(10, method, true);
+        dir.setUint16(14, 0x21, true);
+        dir.setUint32(16, crc, true);
+        dir.setUint32(20, data.length, true);
+        dir.setUint32(24, body.length, true);
+        dir.setUint16(28, nameBytes.length, true);
+        dir.setUint32(42, offset, true);
+        central.push(new Uint8Array(dir.buffer), nameBytes);
+
+        offset += 30 + nameBytes.length + data.length;
+    }
+    const centralSize = central.reduce((sum, part) => sum + part.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, files.length, true);
+    end.setUint16(10, files.length, true);
+    end.setUint32(12, centralSize, true);
+    end.setUint32(16, offset, true);
+    return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+}
+
+function tableEsc(value) {
+    return String(value)
+        .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function tableColName(index) {
+    let n = index + 1;
+    let name = '';
+    while (n > 0) {
+        const rem = (n - 1) % 26;
+        name = String.fromCharCode(65 + rem) + name;
+        n = Math.floor((n - 1) / 26);
+    }
+    return name;
+}
+
+// Excel считает дни от 1899-12-30.
+function tableDateSerial(iso) {
+    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const days = (Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000;
+    return Number.isFinite(days) ? days : null;
+}
+
+/** Собирает .xlsx (Blob) из массива строк; первая строка — шапка. */
+async function buildModelsTableXlsx(rows, sheetName = 'Модели') {
+    const hyperlinks = [];
+    const body = rows.map((row, r) => {
+        const cells = [];
+        for (let c = 0; c < TABLE_HEADER.length; c += 1) {
+            const raw = row[c] == null ? '' : String(row[c]);
+            if (raw === '') continue;
+            const ref = `${tableColName(c)}${r + 1}`;
+            if (r === 0) { cells.push(`<c r="${ref}" s="1" t="inlineStr"><is><t>${tableEsc(raw)}</t></is></c>`); continue; }
+            if (c === TABLE_DATE_COL) {
+                const serial = tableDateSerial(raw);
+                if (serial !== null) { cells.push(`<c r="${ref}" s="2"><v>${serial}</v></c>`); continue; }
+            }
+            if (/^https?:\/\//.test(raw)) {
+                hyperlinks.push({ ref, target: raw });
+                cells.push(`<c r="${ref}" s="3" t="inlineStr"><is><t>${tableEsc(raw)}</t></is></c>`);
+                continue;
+            }
+            // Числовые коды пишем числом — как в исходной таблице (кроме ведущих нулей).
+            if (c === 0 && /^[1-9]\d{0,14}$/.test(raw)) { cells.push(`<c r="${ref}"><v>${raw}</v></c>`); continue; }
+            cells.push(`<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${tableEsc(raw)}</t></is></c>`);
+        }
+        return `<row r="${r + 1}">${cells.join('')}</row>`;
+    }).join('');
+
+    const lastRef = `${tableColName(TABLE_HEADER.length - 1)}${rows.length}`;
+    const cols = TABLE_COL_WIDTHS.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('');
+    const linkRels = hyperlinks.map((h, i) => `<Relationship Id="rIdL${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${tableEsc(h.target)}" TargetMode="External"/>`).join('');
+    const linkTags = hyperlinks.length
+        ? `<hyperlinks>${hyperlinks.map((h, i) => `<hyperlink ref="${h.ref}" r:id="rIdL${i + 1}"/>`).join('')}</hyperlinks>`
+        : '';
+
+    const xmlHead = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    const MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+    const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+    const files = [
+        {
+            name: '[Content_Types].xml',
+            data: `${xmlHead}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
+                + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                + '<Default Extension="xml" ContentType="application/xml"/>'
+                + '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                + '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+                + '</Types>',
+        },
+        {
+            name: '_rels/.rels',
+            data: `${xmlHead}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+                + `<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+        },
+        {
+            name: 'xl/workbook.xml',
+            data: `${xmlHead}<workbook xmlns="${MAIN}" xmlns:r="${REL}"><sheets>`
+                + `<sheet name="${tableEsc(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        },
+        {
+            name: 'xl/_rels/workbook.xml.rels',
+            data: `${xmlHead}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+                + `<Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/>`
+                + `<Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/></Relationships>`,
+        },
+        {
+            name: 'xl/styles.xml',
+            data: `${xmlHead}<styleSheet xmlns="${MAIN}">`
+                + '<numFmts count="1"><numFmt numFmtId="164" formatCode="DD.MM.YYYY"/></numFmts>'
+                + '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
+                + '<font><b/><sz val="11"/><name val="Calibri"/></font>'
+                + '<font><u/><color rgb="FF0563C1"/><sz val="11"/><name val="Calibri"/></font></fonts>'
+                + '<fills count="2"><fill><patternFill patternType="none"/></fill>'
+                + '<fill><patternFill patternType="gray125"/></fill></fills>'
+                + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+                + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+                + '<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+                + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+                + '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+                + '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+                + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
+        },
+        {
+            name: 'xl/worksheets/sheet1.xml',
+            data: `${xmlHead}<worksheet xmlns="${MAIN}" xmlns:r="${REL}">`
+                + `<dimension ref="A1:${lastRef}"/>`
+                + '<sheetViews><sheetView workbookViewId="0">'
+                + '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+                + '<sheetFormatPr defaultRowHeight="15"/>'
+                + `<cols>${cols}</cols><sheetData>${body}</sheetData>`
+                + `<autoFilter ref="A1:${lastRef}"/>${linkTags}</worksheet>`,
+        },
+    ];
+    if (hyperlinks.length) {
+        files.push({
+            name: 'xl/worksheets/_rels/sheet1.xml.rels',
+            data: `${xmlHead}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${linkRels}</Relationships>`,
+        });
+    }
+    return tableZip(files);
+}
+
+/** Кнопка «Выгрузить таблицу»: собирает .xlsx из текущих данных и отдаёт на скачивание. */
+async function exportModelsTable(btn) {
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Собираю…'; }
+    setModalError('admin-error', '');
+    try {
+        const [order, dev] = await Promise.all([fetchTableOrder(), fetchDevStandCodes()]);
+        const siteBase = (order.siteBase || websiteBaseFor(storageBucketName(STORAGE_BASE_URL))
+            || `${location.origin}/`).replace(/\/*$/, '/');
+        const devStand = dev && order.devSiteBase
+            ? { codes: dev.codes, base: order.devSiteBase.replace(/\/*$/, '/') }
+            : dev;
+
+        const { rows, stats } = buildModelsTableRows(order.codes, siteBase, devStand);
+        const blob = await buildModelsTableXlsx(rows);
+
+        const stamp = new Date().toISOString().slice(0, 10);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `модели-${stamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+        console.log(`Таблица: строк ${stats.dataRows}, с моделью ${stats.withModel}`
+            + `${order.codes.length ? '' : ' (порядок строк — по каталогу: нет table-order.json)'}`);
+        if (stats.added.length) console.log(`  кодов вне сохранённого порядка: ${stats.added.length} (${stats.added.slice(0, 10).join(', ')})`);
+    } catch (e) {
+        console.error('Не удалось собрать таблицу:', e);
+        setModalError('admin-error', `Не удалось собрать таблицу: ${e.message}`);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+}
+
+function setupAdminExportButton() {
+    rebindClick('admin-export-table-btn', (e) => exportModelsTable(e.currentTarget));
+}
 // Функция для определения объектов с прозрачными плоскостями (деревья, растительность)
 function detectTransparentBillboards() {
     // Функция отключена

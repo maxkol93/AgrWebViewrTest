@@ -22,12 +22,21 @@
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --out C:\temp\модели.xlsx
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --no-dev   # без колонки дева
+//
+// --diff <старая.xlsx> подсвечивает изменения относительно прошлой выгрузки: зелёным —
+// новые строки (новый код или новая версия модели), жёлтым — строки, у которых поменялись
+// проект/этап/дата/имя/комментарий. Строку опознаём по паре «код СУИП + ФАЙЛ».
+//   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff models-table.xlsx --out models-table-new.xlsx
+//
+// Каждый прогон кладёт в бакет table-order.json (порядок кодов + базы ссылок): из него
+// кнопка «Выгрузить таблицу» в админке собирает такую же таблицу прямо в браузере.
+// Отключается флагом --no-order.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -128,6 +137,37 @@ export async function resolveDevStand(opts = {}, currentBucket) {
     console.warn(`⚠ Дев-бакет ${bucket} не прочитан (${err.message}) — колонка «ССЫЛКА (ДЕВ)» будет пустой.`);
     return null;
   }
+}
+
+/**
+ * Кладёт в бакет table-order.json — порядок кодов и базы ссылок. Из него кнопка
+ * «Выгрузить таблицу» в админке собирает такую же таблицу: публичный CSV-экспорт
+ * Google-таблицы браузеру недоступен (нет CORS), а этот файл лежит рядом с models.json.
+ */
+export async function publishOrder(rows, siteBase, dev) {
+  const { client, bucket } = makeS3();
+  const codes = [];
+  const seen = new Set();
+  for (const row of rows.slice(1)) {
+    const code = String(row[0] ?? '').trim();
+    if (code === SEPARATOR) break; // ниже — блок «без проекта», порядок там не важен
+    if (code && !seen.has(code)) { seen.add(code); codes.push(code); }
+  }
+  const body = JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    generatedBy: 'deploy/models-table.mjs',
+    siteBase,
+    devSiteBase: dev ? dev.base : '',
+    codes,
+  }, null, 2);
+  await client.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: 'table-order.json',
+    Body: body,
+    ContentType: 'application/json; charset=utf-8',
+    CacheControl: 'no-cache',
+  }));
+  return { bucket, codes: codes.length };
 }
 
 // ───────────────────────── порядок строк из Google-таблицы ────────────────────
@@ -421,28 +461,43 @@ function dateSerial(iso) {
 const DATE_COL = HEADER.indexOf('ДАТА');
 export const LAST_COL = colName(HEADER.length - 1);
 
-/** Собирает .xlsx (Buffer) из массива строк; первая строка — шапка. */
-export function buildXlsx(rows, sheetName = 'Модели') {
+// Базовые стили: 0 — обычный, 1 — шапка, 2 — дата, 3 — ссылка. Подсветка добавляет
+// заливку, поэтому у каждого базового стиля есть зелёная и жёлтая копия (см. styles.xml).
+const MARK_STYLE = { new: 4, changed: 7 };
+function styleFor(base, mark) {
+  if (!mark) return base;
+  return MARK_STYLE[mark] + (base === 0 ? 0 : base === 2 ? 1 : 2);
+}
+const attrS = (style) => (style ? ` s="${style}"` : '');
+
+/**
+ * Собирает .xlsx (Buffer) из массива строк; первая строка — шапка.
+ *
+ * @param {Map<number, 'new'|'changed'>|null} marks — какие строки залить (см. markChanges)
+ */
+export function buildXlsx(rows, sheetName = 'Модели', marks = null) {
   const hyperlinks = [];
   const body = rows.map((row, r) => {
     const cells = [];
+    const mark = marks ? marks.get(r) : null;
     for (let c = 0; c < HEADER.length; c += 1) {
       const raw = row[c] == null ? '' : String(row[c]);
-      if (raw === '') continue;
       const ref = `${colName(c)}${r + 1}`;
+      // Пустые ячейки подсвеченной строки всё равно печатаем — иначе заливка рвётся.
+      if (raw === '') { if (mark) cells.push(`<c r="${ref}"${attrS(styleFor(0, mark))}/>`); continue; }
       if (r === 0) { cells.push(`<c r="${ref}" s="1" t="inlineStr"><is><t>${esc(raw)}</t></is></c>`); continue; }
       if (c === DATE_COL) {
         const serial = dateSerial(raw);
-        if (serial !== null) { cells.push(`<c r="${ref}" s="2"><v>${serial}</v></c>`); continue; }
+        if (serial !== null) { cells.push(`<c r="${ref}"${attrS(styleFor(2, mark))}><v>${serial}</v></c>`); continue; }
       }
       if (/^https?:\/\//.test(raw)) {
         hyperlinks.push({ ref, target: raw });
-        cells.push(`<c r="${ref}" s="3" t="inlineStr"><is><t>${esc(raw)}</t></is></c>`);
+        cells.push(`<c r="${ref}"${attrS(styleFor(3, mark))} t="inlineStr"><is><t>${esc(raw)}</t></is></c>`);
         continue;
       }
       // Числовые коды пишем числом — как в исходной таблице (кроме ведущих нулей).
-      if (c === 0 && /^[1-9]\d{0,14}$/.test(raw)) { cells.push(`<c r="${ref}"><v>${raw}</v></c>`); continue; }
-      cells.push(`<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(raw)}</t></is></c>`);
+      if (c === 0 && /^[1-9]\d{0,14}$/.test(raw)) { cells.push(`<c r="${ref}"${attrS(styleFor(0, mark))}><v>${raw}</v></c>`); continue; }
+      cells.push(`<c r="${ref}"${attrS(styleFor(0, mark))} t="inlineStr"><is><t xml:space="preserve">${esc(raw)}</t></is></c>`);
     }
     return `<row r="${r + 1}">${cells.join('')}</row>`;
   }).join('');
@@ -492,14 +547,23 @@ export function buildXlsx(rows, sheetName = 'Модели') {
         + '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
         + '<font><b/><sz val="11"/><name val="Calibri"/></font>'
         + '<font><u/><color rgb="FF0563C1"/><sz val="11"/><name val="Calibri"/></font></fonts>'
-        + '<fills count="2"><fill><patternFill patternType="none"/></fill>'
-        + '<fill><patternFill patternType="gray125"/></fill></fills>'
+        + '<fills count="4"><fill><patternFill patternType="none"/></fill>'
+        + '<fill><patternFill patternType="gray125"/></fill>'
+        + '<fill><patternFill patternType="solid"><fgColor rgb="FFC6EFCE"/><bgColor indexed="64"/></patternFill></fill>'
+        + '<fill><patternFill patternType="solid"><fgColor rgb="FFFFEB9C"/><bgColor indexed="64"/></patternFill></fill></fills>'
         + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
         + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        + '<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        + '<cellXfs count="10"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
         + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
         + '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
-        + '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+        + '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        // 4–6 — новое (зелёная заливка), 7–9 — изменившееся (жёлтая): обычный / дата / ссылка
+        + '<xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/>'
+        + '<xf numFmtId="164" fontId="0" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>'
+        + '<xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>'
+        + '<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>'
+        + '<xf numFmtId="164" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>'
+        + '<xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>'
         + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
     },
     {
@@ -522,6 +586,150 @@ export function buildXlsx(rows, sheetName = 'Модели') {
   return zip(files);
 }
 
+// ───────────────── сравнение с прошлой выгрузкой (подсветка) ─────────────────
+// Читается .xlsx, собранный этим же скриптом (inlineStr + даты числом), поэтому
+// разбор минимальный: без sharedStrings и без общего парсера OOXML.
+
+function unzipEntry(buf, wanted) {
+  let end = buf.length - 22;
+  while (end >= 0 && buf.readUInt32LE(end) !== 0x06054b50) end -= 1;
+  if (end < 0) throw new Error('это не zip/xlsx');
+  const count = buf.readUInt16LE(end + 10);
+  let p = buf.readUInt32LE(end + 16);
+  for (let i = 0; i < count; i += 1) {
+    const nameLen = buf.readUInt16LE(p + 28);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    const local = buf.readUInt32LE(p + 42);
+    if (name === wanted) {
+      const method = buf.readUInt16LE(local + 8);
+      const size = buf.readUInt32LE(local + 18);
+      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.subarray(start, start + size);
+      return (method === 8 ? zlib.inflateRawSync(data) : data).toString('utf8');
+    }
+    p += 46 + nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+  }
+  throw new Error(`в файле нет части ${wanted}`);
+}
+
+function unesc(text) {
+  return text.replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+}
+
+function colIndex(ref) {
+  let n = 0;
+  for (const ch of ref) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+function serialToIso(serial) {
+  const ms = Date.UTC(1899, 11, 30) + Math.round(Number(serial)) * 86400000;
+  if (!Number.isFinite(ms)) return String(serial);
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** Читает прошлую выгрузку в [[...ячейки]]; первая строка — шапка. */
+export async function readXlsxRows(file) {
+  const xml = unzipEntry(await readFile(file), 'xl/worksheets/sheet1.xml');
+  const rows = [];
+  const numeric = []; // где лежало число, а не строка — чтобы потом развернуть дату
+  const rowRe = /<row r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
+  const cellRe = /<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  let rowMatch = rowRe.exec(xml);
+  while (rowMatch) {
+    const row = [];
+    const nums = new Set();
+    let cellMatch = cellRe.exec(rowMatch[2]);
+    while (cellMatch) {
+      const c = colIndex(cellMatch[1]);
+      const inner = cellMatch[3] || '';
+      let value = '';
+      if (/t="inlineStr"/.test(cellMatch[2])) {
+        value = [...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((m) => unesc(m[1])).join('');
+      } else {
+        const v = inner.match(/<v>([\s\S]*?)<\/v>/);
+        if (v) { value = unesc(v[1]); nums.add(c); }
+      }
+      row[c] = value;
+      cellMatch = cellRe.exec(rowMatch[2]);
+    }
+    for (let c = 0; c < row.length; c += 1) if (row[c] == null) row[c] = '';
+    rows.push(row);
+    numeric.push(nums);
+    rowMatch = rowRe.exec(xml);
+  }
+  // Дату в .xlsx хранит число, а стиль ячейки зависит от подсветки — поэтому колонку
+  // ищем по шапке, а не по номеру стиля.
+  const dateCol = (rows[0] || []).findIndex((h) => String(h ?? '').trim() === 'ДАТА');
+  if (dateCol !== -1) {
+    for (let r = 1; r < rows.length; r += 1) {
+      if (numeric[r].has(dateCol) && rows[r][dateCol] !== '') rows[r][dateCol] = serialToIso(rows[r][dateCol]);
+    }
+  }
+  return rows;
+}
+
+// Строку опознаём по паре «код + имя файла»: у одного этапа бывает несколько версий,
+// а код без файла (МОДЕЛЬ = «нет») — тоже нормальная строка со своим ключом.
+const DIFF_KEY = ['код СУИП', 'ФАЙЛ'];
+const DIFF_CMP = ['ПРОЕКТ', 'ОЧЕРЕДЬ\ЭТАП', 'МОДЕЛЬ', 'ДАТА', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ'];
+
+function rowKey(row, pick) {
+  return DIFF_KEY.map((name) => String(pick(row, name) ?? '').trim()).join('\u0000');
+}
+
+/**
+ * Помечает строки новой таблицы относительно прошлой выгрузки.
+ *
+ * @returns {{ marks: Map<number, 'new'|'changed'>, stats: object }}
+ *          marks — индекс строки в rows (0 — шапка) → вид подсветки
+ */
+export function markChanges(newRows, oldRows) {
+  const oldHead = (oldRows[0] || []).map((h) => String(h ?? '').trim());
+  const oldPick = (row, name) => (oldHead.indexOf(name) === -1 ? '' : row[oldHead.indexOf(name)]);
+  const newPick = (row, name) => (HEADER.indexOf(name) === -1 ? '' : row[HEADER.indexOf(name)]);
+  const marks = new Map();
+  const stats = { added: 0, changed: 0, newCodes: [], skipped: !oldHead.includes('код СУИП') };
+  if (stats.skipped) return { marks, stats };
+
+  // У одного кода бывает несколько версий с одинаковым именем файла, поэтому под ключом
+  // держим список: строка считается неизменной, если совпала хоть с одной старой.
+  const oldByKey = new Map();
+  const oldCodes = new Set();
+  for (const row of oldRows.slice(1)) {
+    const code = String(oldPick(row, 'код СУИП') ?? '').trim();
+    if (code === SEPARATOR) continue;
+    if (!row.some((v) => String(v ?? '').trim())) continue;
+    if (code) oldCodes.add(code);
+    const key = rowKey(row, oldPick);
+    if (!oldByKey.has(key)) oldByKey.set(key, []);
+    oldByKey.get(key).push(row);
+  }
+
+  const seenNewCodes = new Set();
+  for (let r = 1; r < newRows.length; r += 1) {
+    const row = newRows[r];
+    const code = String(newPick(row, 'код СУИП') ?? '').trim();
+    if (code === SEPARATOR) continue;
+    if (!row.some((v) => String(v ?? '').trim())) continue;
+    const prev = oldByKey.get(rowKey(row, newPick));
+    if (!prev) {
+      marks.set(r, 'new');
+      stats.added += 1;
+      if (code && !oldCodes.has(code) && !seenNewCodes.has(code)) {
+        seenNewCodes.add(code);
+        stats.newCodes.push(code);
+      }
+      continue;
+    }
+    const same = prev.some((old) => DIFF_CMP.every((name) => String(newPick(row, name) ?? '').trim()
+      === String(oldPick(old, name) ?? '').trim()));
+    if (!same) { marks.set(r, 'changed'); stats.changed += 1; }
+  }
+  return { marks, stats };
+}
+
 // ─────────────────────────────────── CLI ─────────────────────────────────────
 
 function argValue(args, name) {
@@ -540,15 +748,46 @@ export async function exportXlsx(opts = {}) {
 
   const { rows, stats, dropped } = buildRows(data, order, siteBase, dev);
   const outPath = path.resolve(opts.out || path.join(root, 'models-table.xlsx'));
-  await writeFile(outPath, buildXlsx(rows));
+
+  // Подсветка «что нового с прошлой выгрузки» — разовая: сравнение идёт с указанным .xlsx.
+  let marks = null;
+  let diffStats = null;
+  if (opts.diff) {
+    const diffPath = path.resolve(opts.diff);
+    try {
+      const result = markChanges(rows, await readXlsxRows(diffPath));
+      marks = result.marks;
+      diffStats = result.stats;
+      if (diffStats.skipped) console.warn(`⚠ В ${diffPath} нет колонки «код СУИП» — подсветка пропущена.`);
+      if (diffPath === outPath) console.warn('⚠ Файл сравнения совпадает с выходным — он будет перезаписан.');
+    } catch (err) {
+      console.warn(`⚠ Прошлая таблица ${diffPath} не прочитана (${err.message}) — без подсветки.`);
+    }
+  }
+
+  await writeFile(outPath, buildXlsx(rows, 'Модели', marks));
 
   console.log(`Строк: ${stats.dataRows} (с моделью ${stats.withModel}, в блоке «без проекта» ${stats.unknownRows})`);
   if (dev) console.log(`  со ссылкой на дев: ${stats.devCodes} кодов`);
   if (stats.devMissing?.length) console.log(`  на деве есть, а в таблице нет: ${stats.devMissing.join(', ')}`);
   if (stats.addedCodes.length) console.log(`  новых кодов: ${stats.addedCodes.length} (${stats.addedCodes.slice(0, 10).join(', ')}${stats.addedCodes.length > 10 ? ', …' : ''})`);
   if (dropped.length) console.log(`  нет в сервисе, из таблицы убраны: ${dropped.length} (${dropped.slice(0, 10).join(', ')}${dropped.length > 10 ? ', …' : ''})`);
+  if (diffStats && !diffStats.skipped) {
+    console.log(`Подсветка (сравнение с ${path.basename(opts.diff)}): зелёных (новых) ${diffStats.added}, жёлтых (изменившихся) ${diffStats.changed}`);
+    if (diffStats.newCodes.length) console.log(`  кодов, которых раньше не было: ${diffStats.newCodes.length} (${diffStats.newCodes.slice(0, 10).join(', ')}${diffStats.newCodes.length > 10 ? ', …' : ''})`);
+  }
   console.log(`✓ Файл: ${outPath}`);
-  return { rows, stats, dropped, outPath };
+
+  // Тем же прогоном обновляем порядок в бакете — иначе кнопка в админке отстанет.
+  if (!opts.noOrder) {
+    try {
+      const published = await publishOrder(rows, siteBase, dev);
+      console.log(`✓ table-order.json в бакете ${published.bucket}: ${published.codes} кодов`);
+    } catch (err) {
+      console.warn(`⚠ table-order.json не обновлён (${err.message}) — кнопка в админке отдаст прежний порядок.`);
+    }
+  }
+  return { rows, stats, dropped, outPath, diffStats };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -560,6 +799,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     devBucket: argValue(args, '--dev-bucket'),
     devSite: argValue(args, '--dev-site'),
     noDev: args.includes('--no-dev'),
+    diff: argValue(args, '--diff'),
+    noOrder: args.includes('--no-order'),
   }).catch((err) => {
     console.error('✗ Ошибка сборки таблицы:', err.message || err);
     process.exit(1);
