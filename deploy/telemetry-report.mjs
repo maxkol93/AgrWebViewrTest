@@ -164,6 +164,7 @@ const inBackground = (e) => (e.hiddenMs || 0) > BACKGROUND_MS;
 
 // Сервис встраивают в чужие страницы. Поля embed/ref появились в схеме 3, и до неё
 // «не iframe» означало бы «не знаем» — такие события честнее считать отдельно.
+// Смотрим на embed, а не на ref: ref есть и у обычного перехода по ссылке.
 function whereOpened(e) {
   if ((Number(e.v) || 1) < 3) return 'схема старее 3 — не знаем';
   if (!e.embed) return 'прямое открытие';
