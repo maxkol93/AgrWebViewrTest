@@ -15,8 +15,9 @@
 //   node deploy/telemetry-report.mjs --tag me        — только события с меткой me (свой браузер)
 //   node deploy/telemetry-report.mjs --no-tag        — только события без метки (живые пользователи)
 //
-// Метку браузер ставит сам: localStorage.setItem('agrTelemetry', 'me'). Свои открытия
-// при этом продолжают писаться — просто отделимы от чужих.
+// Метка ставится ссылкой: открыть сайт с ?tm=me, и браузер запомнит её на будущее
+// (?tm=off — выключить отправку совсем). Свои открытия при этом продолжают писаться —
+// просто отделимы от чужих.
 //
 // Бакет в РФ доступен только с выключенным VPN, а разбирать удобно потом и где угодно,
 // поэтому дамп и отчёт разделены:
@@ -161,6 +162,14 @@ function countBy(events, keyFn) {
 // честные, а firstFrame и total меряют не сайт, а когда человек вернулся.
 const inBackground = (e) => (e.hiddenMs || 0) > BACKGROUND_MS;
 
+// Сервис встраивают в чужие страницы. Поля embed/ref появились в схеме 3, и до неё
+// «не iframe» означало бы «не знаем» — такие события честнее считать отдельно.
+function whereOpened(e) {
+  if ((Number(e.v) || 1) < 3) return 'схема старее 3 — не знаем';
+  if (!e.embed) return 'прямое открытие';
+  return 'iframe: ' + (e.ref || 'источник скрыт');
+}
+
 function phaseTable(events, title, skip = []) {
   console.log(`\n${title} (${events.length} шт.)`);
   if (!events.length) return;
@@ -303,6 +312,7 @@ async function main() {
   phaseTable(stuck, 'Фазы у тех, кто не дождался');
   phaseTable(background, 'Фазы фоновых вкладок (без «первого кадра» и «ИТОГО»)', ['firstFrame', 'total']);
   breakdown(events, 'По метке браузера («—» = живой пользователь)', (e) => e.tag);
+  breakdown(events, 'Где открыли', whereOpened);
   breakdown(events, 'По типу соединения', (e) => e.net && e.net.type);
   breakdown(events, 'По версии сайта', (e) => e.app);
   breakdown(events, 'По коду модели', (e) => e.code);

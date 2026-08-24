@@ -92,7 +92,7 @@ async function apiRequest(path, { method = 'GET', body, admin = false } = {}) {
 // Меряется именно первая загрузка: смена версии в селекторе идёт уже по прогретому
 // кэшу зависимостей и о проблеме холодного старта ничего не говорит.
 
-const TELEMETRY_SCHEMA = 2;   // 2 — появилось поле hiddenMs (время вкладки в фоне)
+const TELEMETRY_SCHEMA = 3;   // 2 — hiddenMs (вкладка в фоне); 3 — embed/ref (открытие в iframe)
 const TELEMETRY_SLOW_MS = 60000;   // столько ждём конца, потом шлём промежуточное событие
 
 const telemetry = {
@@ -105,7 +105,40 @@ const telemetry = {
     slowTimer: null,
     hiddenMs: 0,                   // сколько вкладка суммарно провела в фоне
     hiddenSince: null,             // момент ухода в фон, null — вкладка на виду
+    tag: null,                     // метка из ?tm=, если хранилище недоступно
 };
+
+// В стороннем iframe доступ к localStorage может быть запрещён — обращение к нему
+// бросает SecurityError. Телеметрия из-за этого молча пропадать не должна, поэтому
+// к хранилищу ходим только отсюда.
+function lsGet(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+function lsSet(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    } catch {
+        // Нет хранилища — метка живёт до конца этого открытия, и этого достаточно.
+    }
+}
+
+// Метку своего браузера ставим ссылкой, а не из консоли: ?tm=me помечает открытие
+// и запоминается на будущее, ?tm=off выключает отправку. Во встроенном плеере это
+// единственный работающий способ — хранилище там своё, отдельное от прямого сайта.
+try {
+    const tag = (new URLSearchParams(window.location.search).get('tm') || '').trim().slice(0, 20);
+    if (tag) {
+        telemetry.tag = tag;
+        lsSet('agrTelemetry', tag);
+    }
+} catch {
+    // Нет URLSearchParams или запрещён доступ к location — метки просто не будет.
+}
 
 // В скрытой вкладке браузер не планирует rAF, поэтому метка firstFrame ждёт
 // возврата человека — на практике часами. Считаем время в фоне и шлём его
@@ -167,12 +200,34 @@ function depsTiming() {
 // пользовательских, но из отчёта они не выпадают — медленная загрузка у автора
 // такой же интересный случай, как у всех остальных.
 function telemetryTag() {
+    const value = (telemetry.tag || lsGet('agrTelemetry') || '').trim();
+    return value && value !== 'off' ? value.slice(0, 20) : undefined;
+}
+
+// Выключено пользователем. Смотрим и в память тоже: ?tm=off должен работать там,
+// где хранилище недоступно.
+function telemetryOff() {
+    return telemetry.tag === 'off' || lsGet('agrTelemetry') === 'off';
+}
+
+// Сервис встраивают в чужие страницы, и открытия оттуда надо отличать от прямых.
+// Из источника берём только хост: полный URL встраивающей страницы — уже слежка,
+// а на вопрос «доходят ли события из iframe» отвечает и домен.
+function embedInfo() {
+    let embed;
     try {
-        const value = (localStorage.getItem('agrTelemetry') || '').trim();
-        return value && value !== 'off' ? value.slice(0, 20) : undefined;
+        embed = window.top !== window.self ? true : undefined;
     } catch {
-        return undefined;
+        // Доступ к window.top закрыт — значит, точно не свой верхний уровень.
+        embed = true;
     }
+    let ref;
+    try {
+        if (document.referrer) ref = new URL(document.referrer).host.slice(0, 100);
+    } catch {
+        // Кривой referrer — не повод терять всё событие.
+    }
+    return { embed, ref };
 }
 
 function telemetryPayload(outcome, err) {
@@ -226,6 +281,7 @@ function telemetryPayload(outcome, err) {
         glbCached: glbEntry && glbEntry.transferSize === 0 && glbEntry.decodedBodySize > 0
             ? true : undefined,
         hiddenMs: hiddenMsNow() || undefined,
+        ...embedInfo(),
         depsBytes: deps.bytes || undefined,
         depsCached: deps.cached || undefined,
         net: {
@@ -252,21 +308,27 @@ function telemetryPayload(outcome, err) {
 function sendTelemetry(outcome, err) {
     try {
         if (telemetry.disabled || telemetry.sent) return;
-        if (outcome === 'slow') {
-            if (telemetry.slowSent) return;
-            telemetry.slowSent = true;
-        } else {
-            telemetry.sent = true;
-            if (telemetry.slowTimer) clearTimeout(telemetry.slowTimer);
+        if (outcome === 'slow' && telemetry.slowSent) return;
+
+        // Итог пришёл — промежуточное «slow» больше не нужно, даже если само событие
+        // никуда не поедет.
+        if (outcome !== 'slow' && telemetry.slowTimer) {
+            clearTimeout(telemetry.slowTimer);
+            telemetry.slowTimer = null;
         }
 
-        if (!API_BASE_URL || localStorage.getItem('agrTelemetry') === 'off') return;
+        // Причины не отправлять проверяем ДО того, как пометить событие отправленным:
+        // иначе первая же осечка глушит телеметрию этого открытия навсегда.
+        if (!API_BASE_URL || telemetryOff()) return;
 
         const url = `${API_BASE_URL}?action=telemetry`;
         // text/plain не вызывает preflight, а sendBeacon переживает закрытие вкладки —
         // именно брошенные загрузки и есть самый интересный случай.
         const blob = new Blob([JSON.stringify(telemetryPayload(outcome, err))],
             { type: 'text/plain;charset=UTF-8' });
+
+        if (outcome === 'slow') telemetry.slowSent = true;
+        else telemetry.sent = true;
 
         if (navigator.sendBeacon && navigator.sendBeacon(url, blob)) return;
         fetch(url, { method: 'POST', body: blob, keepalive: true }).catch(() => {});
