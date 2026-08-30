@@ -2067,7 +2067,12 @@ function applyBackground() {
     const previousGradient = gradientTexture;
     gradientTexture = null;
 
-    if (settings.background === 'hdri' && envMap) {
+    // Фоновый бокс three не отрисовывается ортокамерой: в виде сверху HDRI-фон
+    // уходил в чёрное. Сверху он и не нужен — это план площадки, неба в кадре нет,
+    // поэтому там подставляем плоский цвет. Градиент ортокамера рисует нормально.
+    const canUseHdriBackground = !camera || camera.isPerspectiveCamera;
+
+    if (settings.background === 'hdri' && envMap && canUseHdriBackground) {
         scene.background = envMap;
         // Оба свойства есть в 0.159. backgroundRotation — нет, поэтому фон
         // не следует за поворотом окружения; это известное ограничение версии.
@@ -3835,6 +3840,7 @@ function exitTopViewImmediate() {
     controls.enableRotate = true;
     controls.update();
     syncComposerCamera();
+    applyBackground();
 
     isTopView = false;
     updateTopViewButton();
@@ -3879,6 +3885,8 @@ function setTopView(enabled) {
     controls.update();
     syncComposerCamera();
     isTopView = enabled;
+    // Фон зависит от типа камеры, см. applyBackground()
+    applyBackground();
     updateTopViewButton();
 }
 
