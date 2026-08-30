@@ -1277,7 +1277,7 @@ function toggleControlMode() {
         controlMode = 'wasd';
         
         // В WASD летаем только перспективной камерой
-        if (isTopView) setTopView(false);
+        exitTopViewImmediate();
         
         // Показываем индикатор скорости
         const speedControl = document.getElementById('speed-control');
@@ -1789,7 +1789,7 @@ async function init() {
     controls.minPolarAngle = 0;
     controls.maxPolarAngle = Math.PI;
     controls.enableZoom = true;
-    controls.zoomSpeed = 0.55; // Единая скорость зума для всех вариантов
+    controls.zoomSpeed = 0.9; // Шаг колеса: 0.55 был слишком мелким
     controls.rotateSpeed = 1.0;
     controls.panSpeed = 0.5;
     controls.autoRotate = true;
@@ -1798,10 +1798,18 @@ async function init() {
     // Включаем зум к курсору только для колесика мыши
     controls.zoomToCursor = true;
 
-    // Жесты на тач-экране полностью на стороне OrbitControls: один палец — вращение,
-    // два — зум с панорамированием. Свой pinch-обработчик отсюда убран (он двигал
-    // camera.position параллельно с DOLLY_PAN, отчего жест дёргался).
-    controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+    // ЛКМ таскает, ПКМ вращает: люди привыкли перемещать левой. Вращение правой
+    // кнопкой обрабатываем сами (см. beginCursorRotate) — ему нужен центр под
+    // курсором, а OrbitControls всегда центрирует цель через lookAt(target).
+    controls.mouseButtons = {
+        LEFT: THREE.MOUSE.PAN,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: -1
+    };
+
+    // На тач-экране та же логика: один палец — перемещение, два — вращение с зумом.
+    // Свой pinch-обработчик убран (он двигал camera.position параллельно с DOLLY_PAN).
+    controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
     
     // Оставляем стандартное поведение OrbitControls для средней кнопки мыши
     
@@ -1809,7 +1817,11 @@ async function init() {
     // OrbitControls запомнит стартовую сферу вращения
     renderer.domElement.addEventListener('pointerdown', updateOrbitPivot, true);
     renderer.domElement.addEventListener('dblclick', handlePivotDoubleClick);
-    renderer.domElement.addEventListener('pointerdown', () => { pivotFlightCancelled = true; });
+    renderer.domElement.addEventListener('pointerdown', beginCursorRotate);
+    renderer.domElement.addEventListener('pointermove', moveCursorRotate);
+    renderer.domElement.addEventListener('pointerup', endCursorRotate);
+    renderer.domElement.addEventListener('pointercancel', endCursorRotate);
+    renderer.domElement.addEventListener('pointerdown', () => { cameraFlightCancelled = true; });
 
     container.addEventListener('mousedown', disableAutoRotate);
     container.addEventListener('wheel', disableAutoRotate);
@@ -2620,6 +2632,8 @@ function animate() {
         }
     }
 
+    updateCursorRotateGlide();
+
     if (controls) controls.update();
 
     updateWASDControls();
@@ -2859,8 +2873,8 @@ function loadSelectedModel() {
 
 function resetCamera(immediate = false) {
     // Сброс всегда возвращает в обычную перспективу: иначе «Сброс камеры» в ортовиде
-    // выглядит так, будто он не сработал.
-    if (isTopView) setTopView(false);
+    // выглядит так, будто он не сработал. Без перелёта — дальше своя анимация сброса.
+    exitTopViewImmediate();
 
     const resetPos = () => {
         // Сохраняем оригинальную позицию и ориентацию
@@ -3030,7 +3044,7 @@ function raycastModel(event) {
 }
 
 function updateOrbitPivot(event) {
-    if (controlMode !== 'orbit' || !controls || !controls.enabled) return;
+    if (controlMode !== 'orbit' || isTopView || !controls || !controls.enabled) return;
     if (isUIElement(event.target)) return;
     // Второй палец — это жест зума OrbitControls, пивот по нему не двигаем
     if (event.pointerType === 'touch' && event.isPrimary === false) return;
@@ -3043,37 +3057,176 @@ function updateOrbitPivot(event) {
     controls.update();
 }
 
-// Двойной клик — «поставить пивот сюда»: в отличие от нажатия, цель переносится
-// в саму точку попадания, а не на ось взгляда. Разворот камеры здесь уместен,
-// это явный жест, поэтому он сглажен анимацией.
-let pivotFlightCancelled = false;
+// ─── Вращение вокруг точки под курсором ────────────────────────────────────────
+// OrbitControls вращает вокруг controls.target и каждым update() делает lookAt(target),
+// поэтому «честный» центр под курсором с ним недостижим: цель в стороне от оси взгляда
+// разворачивает камеру. Здесь вращение своё: камера поворачивается ВОКРУГ точки
+// попадания, сохраняя направление взгляда относительно сцены — как в Blender.
+// После поворота цель возвращается на ось взгляда, чтобы OrbitControls (пан, зум)
+// продолжал работать и ничего не разворачивал.
 
-function flyPivotTo(destination) {
-    const start = controls.target.clone();
-    const duration = 400;
+const ROTATE_SPEED = 0.005;   // радиан на пиксель
+const ROTATE_GLIDE_DECAY = 0.88;
+const ROTATE_GLIDE_MIN = 0.0002;
+
+const cursorRotate = {
+    active: false,
+    pointerId: null,
+    pivot: new THREE.Vector3(),
+    lastX: 0,
+    lastY: 0,
+    velocityX: 0,
+    velocityY: 0,
+    gliding: false
+};
+
+// Поворот камеры вокруг pivot: рыскание вокруг мировой Y, тангаж вокруг оси «вправо»
+// самой камеры. У полюсов тангаж отбрасываем, иначе взгляд схлопывается на ось.
+function orbitAroundPivot(yaw, pitch) {
+    if (!camera || !controls) return;
+
+    const pivot = cursorRotate.pivot;
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0).normalize();
+
+    const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    const pitchQuat = new THREE.Quaternion().setFromAxisAngle(right, pitch);
+    const rotation = yawQuat.multiply(pitchQuat);
+
+    const direction = camera.getWorldDirection(new THREE.Vector3()).applyQuaternion(rotation);
+    if (Math.abs(direction.y) > 0.995) {
+        // слишком близко к полюсу — оставляем только рыскание
+        rotation.copy(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw));
+    }
+
+    const offset = camera.position.clone().sub(pivot).applyQuaternion(rotation);
+    camera.position.copy(pivot).add(offset);
+    camera.quaternion.premultiply(rotation);
+
+    // Цель — строго на оси взгляда, на расстоянии до точки вращения: тогда lookAt
+    // внутри OrbitControls ничего не меняет, а пан и зум остаются осмысленными.
+    const distance = Math.max(camera.position.distanceTo(pivot), controls.minDistance);
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    controls.target.copy(camera.position).addScaledVector(forward, distance);
+    controls.update();
+}
+
+function beginCursorRotate(event) {
+    if (event.button !== 2) return;                       // только ПКМ
+    if (controlMode !== 'orbit' || isTopView) return;     // в ортовиде вращение заблокировано
+    if (!controls || !controls.enabled) return;
+    if (isUIElement(event.target)) return;
+
+    const hit = raycastModel(event);
+    cursorRotate.pivot.copy(hit ? hit.point : controls.target);
+    cursorRotate.active = true;
+    cursorRotate.gliding = false;
+    cursorRotate.pointerId = event.pointerId;
+    cursorRotate.lastX = event.clientX;
+    cursorRotate.lastY = event.clientY;
+    cursorRotate.velocityX = 0;
+    cursorRotate.velocityY = 0;
+    userMovedCamera = true;
+    controls.autoRotate = false;
+
+    if (renderer.domElement.setPointerCapture) {
+        renderer.domElement.setPointerCapture(event.pointerId);
+    }
+}
+
+function moveCursorRotate(event) {
+    if (!cursorRotate.active || event.pointerId !== cursorRotate.pointerId) return;
+
+    const dx = event.clientX - cursorRotate.lastX;
+    const dy = event.clientY - cursorRotate.lastY;
+    cursorRotate.lastX = event.clientX;
+    cursorRotate.lastY = event.clientY;
+
+    cursorRotate.velocityX = -dx * ROTATE_SPEED;
+    cursorRotate.velocityY = -dy * ROTATE_SPEED;
+    orbitAroundPivot(cursorRotate.velocityX, cursorRotate.velocityY);
+}
+
+function endCursorRotate(event) {
+    if (!cursorRotate.active) return;
+    if (event && event.pointerId !== cursorRotate.pointerId) return;
+
+    cursorRotate.active = false;
+    cursorRotate.pointerId = null;
+
+    // Небольшой выбег после отпускания — чтобы вращение не обрывалось резко,
+    // как оно вело себя с затуханием OrbitControls.
+    if (Math.abs(cursorRotate.velocityX) > ROTATE_GLIDE_MIN ||
+        Math.abs(cursorRotate.velocityY) > ROTATE_GLIDE_MIN) {
+        cursorRotate.gliding = true;
+    }
+}
+
+// Вызывается из animate(): доигрывает инерцию вращения
+function updateCursorRotateGlide() {
+    if (!cursorRotate.gliding) return;
+
+    if (controlMode !== 'orbit' || isTopView) {
+        cursorRotate.gliding = false;
+        return;
+    }
+
+    cursorRotate.velocityX *= ROTATE_GLIDE_DECAY;
+    cursorRotate.velocityY *= ROTATE_GLIDE_DECAY;
+
+    if (Math.abs(cursorRotate.velocityX) < ROTATE_GLIDE_MIN &&
+        Math.abs(cursorRotate.velocityY) < ROTATE_GLIDE_MIN) {
+        cursorRotate.gliding = false;
+        return;
+    }
+
+    orbitAroundPivot(cursorRotate.velocityX, cursorRotate.velocityY);
+}
+
+// Двойной клик — подлёт к точке: камера приближается к тому, по чему щёлкнули,
+// как «зум к выделению» в Blender. Просто переносить сюда центр вращения смысла
+// мало — центр и так встаёт под курсор при каждом нажатии.
+let cameraFlightCancelled = false;
+
+function flyCameraTo(point) {
+    if (!controls || !camera) return;
+
+    const startPosition = camera.position.clone();
+    const startTarget = controls.target.clone();
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+
+    // Подлетаем примерно на треть нынешней дистанции, но не ближе разумного
+    const currentDistance = startPosition.distanceTo(point);
+    const endDistance = Math.max(currentDistance * 0.35, controls.minDistance * 5);
+    const endPosition = point.clone().addScaledVector(forward, -endDistance);
+
+    const duration = 450;
     const startTime = performance.now();
-    pivotFlightCancelled = false;
+    cameraFlightCancelled = false;
 
     function step(time) {
-        if (pivotFlightCancelled) return;
+        if (cameraFlightCancelled) return;
         const progress = Math.min((time - startTime) / duration, 1);
         const eased = 1 - Math.pow(1 - progress, 3);
-        controls.target.lerpVectors(start, destination, eased);
+
+        camera.position.lerpVectors(startPosition, endPosition, eased);
+        controls.target.lerpVectors(startTarget, point, eased);
         controls.update();
+
         if (progress < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
 }
 
 function handlePivotDoubleClick(event) {
-    if (controlMode !== 'orbit' || !controls || !controls.enabled) return;
+    if (controlMode !== 'orbit' || isTopView || !controls || !controls.enabled) return;
     if (isUIElement(event.target)) return;
 
     const hit = raycastModel(event);
     if (!hit) return;
 
     controls.autoRotate = false;
-    flyPivotTo(hit.point.clone());
+    userMovedCamera = true;
+    flyCameraTo(hit.point.clone());
 }
 
 // ─── K2. Ортогональный вид сверху ──────────────────────────────────────────────
@@ -3112,28 +3265,109 @@ function ensureOrthoCamera() {
     return orthoCamera;
 }
 
+// Переход в вид сверху и обратно: сначала перспективная камера плавно взлетает над
+// моделью, и только в конце подменяется ортогональной — переключение «в лоб» читается
+// как телепорт и теряется ориентация. Возврат идёт тем же путём назад.
+let topViewTransition = false;
+let savedPerspectiveView = null;
+
+function topViewPosition() {
+    const height = Math.max(modelViewRadius() * 4, 500);
+    return new THREE.Vector3(controls.target.x, controls.target.y + height, controls.target.z);
+}
+
+function flyPerspectiveTo(endPosition, onDone) {
+    const startPosition = perspectiveCamera.position.clone();
+    const duration = 550;
+    const startTime = performance.now();
+
+    function step(time) {
+        const progress = Math.min((time - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+
+        perspectiveCamera.position.lerpVectors(startPosition, endPosition, eased);
+        controls.update();
+
+        if (progress < 1) {
+            requestAnimationFrame(step);
+        } else if (onDone) {
+            onDone();
+        }
+    }
+    requestAnimationFrame(step);
+}
+
+// Мгновенный выход без перелёта: нужен там, где сразу следом идёт своя анимация
+// (сброс камеры) или смена режима управления — иначе две анимации тянут камеру врозь.
+function exitTopViewImmediate() {
+    if (!isTopView || !controls) return;
+
+    // Позицию оставляем ту, что на экране: следом всё равно идёт своя анимация,
+    // и возврат в сохранённый вид дал бы лишний скачок.
+    if (orthoCamera) perspectiveCamera.position.copy(orthoCamera.position);
+
+    camera = perspectiveCamera;
+    controls.object = camera;
+    controls.enableRotate = true;
+    controls.update();
+
+    isTopView = false;
+    topViewTransition = false;
+    updateTopViewButton();
+}
+
 function setTopView(enabled) {
-    if (!controls || enabled === isTopView) return;
+    if (!controls || enabled === isTopView || topViewTransition) return;
 
     // В WASD ортокамера смысла не имеет — возвращаемся в орбитальный режим
     if (enabled && controlMode === 'wasd') toggleControlMode();
 
-    isTopView = enabled;
+    cameraFlightCancelled = true;
+    cursorRotate.gliding = false;
+    userMovedCamera = true;
+    topViewTransition = true;
 
     if (enabled) {
-        const ortho = ensureOrthoCamera();
-        const height = Math.max(modelViewRadius() * 4, 500);
-        ortho.position.set(controls.target.x, controls.target.y + height, controls.target.z);
-        ortho.lookAt(controls.target);
-        camera = ortho;
-    } else {
-        camera = perspectiveCamera;
+        savedPerspectiveView = {
+            position: perspectiveCamera.position.clone(),
+            target: controls.target.clone()
+        };
+
+        // Взлетаем перспективной камерой, затем подменяем её ортогональной
+        flyPerspectiveTo(topViewPosition(), () => {
+            const ortho = ensureOrthoCamera();
+            ortho.position.copy(perspectiveCamera.position);
+            ortho.lookAt(controls.target);
+
+            camera = ortho;
+            controls.object = camera;
+            // Сверху вращать нечего: это план площадки, наклон его только ломает
+            controls.enableRotate = false;
+            controls.update();
+
+            isTopView = true;
+            topViewTransition = false;
+            updateTopViewButton();
+        });
+        return;
     }
 
+    // Возврат: сперва отдаём управление перспективной камере в той же точке
+    perspectiveCamera.position.copy(orthoCamera ? orthoCamera.position : perspectiveCamera.position);
+    camera = perspectiveCamera;
     controls.object = camera;
+    controls.enableRotate = true;
     controls.update();
-    userMovedCamera = true;
+
+    isTopView = false;
     updateTopViewButton();
+
+    const back = savedPerspectiveView ? savedPerspectiveView.position : initialCameraPosition;
+    if (savedPerspectiveView) controls.target.copy(savedPerspectiveView.target);
+
+    flyPerspectiveTo(back.clone(), () => {
+        topViewTransition = false;
+    });
 }
 
 function toggleTopView() {
