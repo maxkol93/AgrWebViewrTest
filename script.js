@@ -1685,8 +1685,13 @@ const DEFAULT_SETTINGS = {
     // выключенным — ровно ничего, рендер идёт мимо композера.
     shadows: false,
     shadowQuality: 2048,
+    // Радиус размытия теневой карты. Работает только с VSM: у PCFSoftShadowMap
+    // shadow.radius игнорируется вовсе, то есть мягкостью там управлять нечем.
+    shadowSoftness: 4,
     ao: false,
-    aoRadius: 4,          // в единицах сцены; модель нормализована в куб 200
+    // Единицы сцены (модель нормализована в куб 200). Было 4 — это не контактное
+    // затенение, а пятно на полздания, отсюда и ореолы вокруг силуэтов.
+    aoRadius: 1,
     aoFalloff: 2,         // distanceExponent: насколько быстро затенение спадает
     // Замер на живой модели: AO в полном разрешении рубил кадры примерно вдвое
     // (40 → 15-20). Черновое считает затенение в половинном разрешении и с вдвое
@@ -2135,10 +2140,14 @@ function applyShadows() {
 
     const wanted = !!settings.shadows;
 
-    if (renderer.shadowMap.enabled !== wanted) {
+    if (renderer.shadowMap.enabled !== wanted || renderer.shadowMap.type !== THREE.VSMShadowMap) {
         renderer.shadowMap.enabled = wanted;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        // Появление и исчезновение теней меняет шейдер материала
+        // VSM вместо PCFSoftShadowMap: он размывает карту глубины при её построении,
+        // а построение у нас разовое (autoUpdate = false). Значит размытие любого
+        // радиуса стоит ноль в кадре — ровно то, ради чего идут в запечку.
+        // У PCFSoftShadowMap мягкость не настраивается: shadow.radius им игнорируется.
+        renderer.shadowMap.type = THREE.VSMShadowMap;
+        // Смена типа и появление теней меняют шейдер материала
         eachModelMaterial((material) => { material.needsUpdate = true; });
     }
 
@@ -2153,6 +2162,10 @@ function applyShadows() {
             sunLight.shadow.map.dispose();
             sunLight.shadow.map = null;
         }
+        if (sunLight.shadow.mapPass) {
+            sunLight.shadow.mapPass.dispose();
+            sunLight.shadow.mapPass = null;
+        }
     }
 
     const radius = modelViewRadius();
@@ -2165,10 +2178,15 @@ function applyShadows() {
     shadowCamera.far = radius * 6;
     shadowCamera.updateProjectionMatrix();
 
-    // Смещения тоже от габарита: модель нормализуется в куб 200, но радиус
-    // ограничивающей сферы у разных моделей всё же разный.
-    sunLight.shadow.bias = -0.0005;
-    sunLight.shadow.normalBias = radius * 0.004;
+    // У VSM глубина сравнивается через дисперсию, и обычное смещение ему только
+    // вредит: тень отрывается от основания. Утечку света он лечит размытием
+    // и числом выборок, а не bias.
+    sunLight.shadow.bias = 0;
+    sunLight.shadow.normalBias = 0;
+    // Нулевой радиус VSM не разрешаем: без размытия дисперсия вырождается,
+    // и по всей площадке идёт рябь самозатенения.
+    sunLight.shadow.radius = Math.max(0.5, settings.shadowSoftness);
+    sunLight.shadow.blurSamples = 12;
 
     sunLight.shadow.autoUpdate = false;
     sunLight.shadow.needsUpdate = true;
@@ -2579,6 +2597,7 @@ function setupSettingsPanel() {
     addSlider(light, 'Сила солнца', 'sunIntensity', 0, 3, 0.05, applySun);
     addToggle(light, 'Тени от солнца', 'shadows', () => { applyShadows(); setupSettingsPanel(); });
     if (settings.shadows) {
+        addSlider(light, 'Мягкость тени', 'shadowSoftness', 0.5, 16, 0.5, applyShadows);
         addChoice(
             light,
             [{ name: '1024', value: 1024 }, { name: '2048', value: 2048 }, { name: '4096', value: 4096 }],
@@ -5183,11 +5202,16 @@ function prepareModelMaterials() {
 
     // Тени включаются тумблером, но флаги на мешах ставим сразу: они ничего
     // не стоят, пока renderer.shadowMap.enabled = false.
+    //
+    // Стекло тень не бросает. Полутени в теневой карте не бывает: остекление
+    // легло бы сплошной плитой, здание изнутри стало бы чёрным, а у VSM на кромке
+    // такой плиты ещё и подтекает свет. В архитектурной подаче окна и не затеняют.
     model.traverse((node) => {
-        if (node.isMesh) {
-            node.castShadow = true;
-            node.receiveShadow = true;
-        }
+        if (!node.isMesh) return;
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        const seeThrough = materials.every((m) => m && m.transparent && m.opacity < 0.9);
+        node.castShadow = !seeThrough;
+        node.receiveShadow = true;
     });
 
     fileMaterialState.clear();
