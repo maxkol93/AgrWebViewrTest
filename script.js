@@ -1688,6 +1688,11 @@ const DEFAULT_SETTINGS = {
     ao: false,
     aoRadius: 4,          // в единицах сцены; модель нормализована в куб 200
     aoFalloff: 2,         // distanceExponent: насколько быстро затенение спадает
+    // Замер на живой модели: AO в полном разрешении рубил кадры примерно вдвое
+    // (40 → 15-20). Черновое считает затенение в половинном разрешении и с вдвое
+    // меньшим числом выборок — после пуассоновского шумоподавления разница
+    // в картинке невелика, а цена падает вчетверо по пикселям.
+    aoQuality: 'draft',   // 'draft' | 'fine'
     outline: false,
     outlineThickness: 1,
     outlineStrength: 3,
@@ -2247,6 +2252,7 @@ async function ensureComposer() {
         composer.setSize(width, height);
 
         composerParts = parts;
+        resizeAoPass();
         composerOrtho = !camera.isPerspectiveCamera;
         applyPostprocessingSettings();
     } catch (error) {
@@ -2260,15 +2266,38 @@ async function ensureComposer() {
     }
 }
 
+// AO считается в своём разрешении, а композитится в полное: это самый дешёвый
+// способ вернуть кадры, потому что весь тяжёлый проход идёт по вчетверо меньшему
+// числу пикселей. Вызывать после composer.setSize() — тот раздаёт проходам полный
+// размер и затирает наш.
+function resizeAoPass() {
+    if (!composer || !composerParts || !container) return;
+
+    const ratio = cappedPixelRatio();
+    const width = Math.max(1, Math.round((container.clientWidth || 1) * ratio));
+    const height = Math.max(1, Math.round((container.clientHeight || 1) * ratio));
+    const scale = settings.aoQuality === 'fine' ? 1 : 0.5;
+
+    composerParts.ao.setSize(
+        Math.max(1, Math.round(width * scale)),
+        Math.max(1, Math.round(height * scale))
+    );
+}
+
 function applyPostprocessingSettings() {
     if (!composerParts) return;
     const { ao, outline } = composerParts;
 
+    const draft = settings.aoQuality !== 'fine';
+
     ao.enabled = !!settings.ao;
     ao.updateHbaoMaterial({
         radius: settings.aoRadius,
-        distanceExponent: settings.aoFalloff
+        distanceExponent: settings.aoFalloff,
+        samples: draft ? 8 : 16
     });
+    ao.updatePdMaterial({ samples: draft ? 8 : 16 });
+    resizeAoPass();
 
     outline.enabled = !!settings.outline;
     // Силуэт всей модели: OutlinePass обводит внешний контур выделенного.
@@ -2529,6 +2558,12 @@ function setupSettingsPanel() {
     // постпроцессинга, выключение освобождает его таргеты.
     addToggle(display, 'Затенение (AO)', 'ao', () => { applyPostprocessing(); setupSettingsPanel(); });
     if (settings.ao) {
+        addChoice(
+            display,
+            [{ name: 'Черновое', value: 'draft' }, { name: 'Точное', value: 'fine' }],
+            (value) => value === settings.aoQuality,
+            (value) => { settings.aoQuality = value; saveSettings(); applyPostprocessingSettings(); }
+        );
         addSlider(display, 'Радиус AO', 'aoRadius', 0.5, 20, 0.5, applyPostprocessingSettings);
         // «Сила» была бы понятнее, но в HBAOPass 0.159 её нет: результат
         // домножается общим CopyShader'ом, и интенсивность без переопределения
@@ -3156,6 +3191,7 @@ function onWindowResize() {
     if (composer) {
         composer.setPixelRatio(cappedPixelRatio());
         composer.setSize(width, height);
+        resizeAoPass();
     }
     
     // Пока пользователь не трогал камеру, держим модель вписанной в кадр: поворот
