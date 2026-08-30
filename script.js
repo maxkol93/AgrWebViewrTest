@@ -2309,6 +2309,45 @@ function applyPostprocessingSettings() {
     outline.hiddenEdgeColor.set(settings.outlineColor);
 }
 
+// AO — единственный по-настоящему дорогой пункт этапа B: замер на живой модели
+// дал 40 кадров без эффектов, 17 с точным AO и 30-35 с черновым. Но затенение
+// разглядывают стоя, а не в движении, поэтому пока камера едет, проход выключен
+// и возвращается через мгновение после остановки. В навигации кадры полные,
+// картинка с AO — там, где она нужна.
+//
+// Автоповорот до первого жеста исключение: человек ещё ничего не крутит, и первое
+// впечатление о модели должно быть с затенением.
+const AO_SETTLE_MS = 180;
+
+let aoStillSince = 0;
+const aoLastPosition = new THREE.Vector3();
+const aoLastQuaternion = new THREE.Quaternion();
+
+function updateAoGating() {
+    if (!composerParts || !camera) return;
+
+    if (!settings.ao) {
+        composerParts.ao.enabled = false;
+        return;
+    }
+
+    if (controls && controls.autoRotate) {
+        composerParts.ao.enabled = true;
+        return;
+    }
+
+    if (!camera.position.equals(aoLastPosition) || !camera.quaternion.equals(aoLastQuaternion)) {
+        aoLastPosition.copy(camera.position);
+        aoLastQuaternion.copy(camera.quaternion);
+        aoStillSince = 0;
+        composerParts.ao.enabled = false;
+        return;
+    }
+
+    if (!aoStillSince) aoStillSince = performance.now();
+    composerParts.ao.enabled = performance.now() - aoStillSince >= AO_SETTLE_MS;
+}
+
 function applyPostprocessing() {
     if (!postprocessingWanted()) {
         // Оба эффекта выключены — освобождаем таргеты композера: на телефоне
@@ -3226,6 +3265,8 @@ function animate() {
     if (renderer && scene && camera) {
         // Эффекты выключены — рендерим напрямую, ровно как до этапа B.
         // Композер вступает в дело только когда включён AO или силуэты.
+        updateAoGating();
+
         if (composer && postprocessingWanted()) {
             composer.render();
         } else {
