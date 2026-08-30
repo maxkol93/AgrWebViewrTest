@@ -997,6 +997,9 @@ let camera, scene, renderer, controls, model, envMap;
 // Глобальная camera всегда указывает на активную: от неё зависят рендер, рейкасты и WASD.
 let perspectiveCamera = null;
 let orthoCamera = null;
+// Ключевой и заполняющий свет: ими двигает applySun() по азимуту и высоте
+let sunLight = null;
+let fillLight = null;
 let isTopView = false;
 let customTextures = {};
 let modelSelect; 
@@ -1636,14 +1639,112 @@ let currentModelPath = '';
 let userMovedCamera = false;
 
 const USE_HDR = true;
-// Список HDR карт (лежат в Object Storage под префиксом environments/)
+// Пресеты освещения. day.hdr из списка убран (плоский полдень никому не нравился),
+// сам файл в бакете остаётся. Дефолт прежний — sunset.hdr, картинка «из коробки»
+// не меняется, меняется только подпись.
 const HDR_MAPS = [
-    { name: 'Закат', path: 'sunset.hdr' },
-    { name: 'День',  path: 'day.hdr' },
-    { name: 'Ночь',  path: 'night.hdr' }
+    { name: 'День',  path: 'sunset.hdr' },
+    { name: 'Вечер', path: 'night.hdr' }
 ];
 
 let currentHdrIndex = 0;
+
+// ─── Настройки визуала ────────────────────────────────────────────────────────
+// Один JSON в localStorage, по образцу agrTelemetry / agrAdminToken. Дефолты
+// подобраны так, чтобы «из коробки» ничего дорогого не включалось: настройки
+// подкручивают то, что и так рисуется, а не добавляют новых проходов.
+
+const SETTINGS_KEY = 'agrViewerSettings';
+
+const DEFAULT_SETTINGS = {
+    hdrIndex: 0,
+    // Экспозиция задавалась в двух местах и по-разному (0.8 при инициализации,
+    // 1.0 после загрузки HDR). Теперь одно число, и оно поднято: было тускло.
+    exposure: 1.2,
+    envIntensity: 0.5,   // сила окружения на материалах (была прибита к 0.5)
+    envRotation: 0,      // градусы, поворот HDR вокруг вертикали
+    sunAzimuth: 45,      // градусы
+    sunElevation: 40,    // градусы над горизонтом
+    doubleSided: false,  // выкл — сторона как в файле
+    maskedTransparency: false, // флаг отката к прежнему alphaTest 0.5
+    background: 'color', // 'color' | 'gradient' | 'hdri'
+    bgColor: '#1a1a1a',
+    bgTop: '#3d4a57',
+    bgBottom: '#15171b',
+    bgBlur: 0.4,
+    bgIntensity: 1.0,
+    fog: false,
+    fogColor: '#8a929c',
+    fogDensity: 1.0   // множитель: больше — туман ближе и плотнее
+};
+
+let settings = Object.assign({}, DEFAULT_SETTINGS);
+
+function loadSettings() {
+    try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        for (const key of Object.keys(DEFAULT_SETTINGS)) {
+            if (saved[key] !== undefined) settings[key] = saved[key];
+        }
+    } catch (e) {
+        console.warn('Настройки не прочитались, берём дефолтные:', e && e.message);
+    }
+    if (settings.hdrIndex < 0 || settings.hdrIndex >= HDR_MAPS.length) settings.hdrIndex = 0;
+    currentHdrIndex = settings.hdrIndex;
+}
+
+function saveSettings() {
+    try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch (e) {
+        console.warn('Настройки не сохранились:', e && e.message);
+    }
+}
+
+function resetSettings() {
+    settings = Object.assign({}, DEFAULT_SETTINGS);
+    saveSettings();
+    // Пресет перезагружает карту окружения; всё остальное применяем сразу,
+    // чтобы сброс сработал даже если HDR не докачается.
+    if (currentHdrIndex !== settings.hdrIndex) changeHDR(settings.hdrIndex);
+    applyAllSettings();
+    setupSettingsPanel();
+}
+
+// Применить всё разом: после загрузки модели, после окружения и по «Сбросить».
+function applyAllSettings() {
+    applyExposure();
+    applySun();
+    applyMaterialSettings();
+    applyBackground();
+    applyFog();
+}
+
+function applyExposure() {
+    if (!renderer) return;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = settings.exposure;
+}
+
+// Солнце и заполняющий свет крутятся вокруг сцены практически бесплатно —
+// это и есть быстрый «посмотреть по-другому» без пересборки PMREM.
+function applySun() {
+    if (!sunLight || !fillLight) return;
+    const az = THREE.MathUtils.degToRad(settings.sunAzimuth);
+    const el = THREE.MathUtils.degToRad(settings.sunElevation);
+    const r = 500;
+
+    sunLight.position.set(
+        r * Math.cos(el) * Math.sin(az),
+        r * Math.sin(el),
+        r * Math.cos(el) * Math.cos(az)
+    );
+    // Заполняющий — с противоположной стороны и пониже, чтобы теневая сторона
+    // не проваливалась в чёрное.
+    fillLight.position.set(-sunLight.position.x, r * 0.3, -sunLight.position.z);
+}
 
 function getHdrUrl(path) {
     if (!storageConfigured && !initStorage()) {
@@ -1663,7 +1764,7 @@ function cappedPixelRatio() {
 
 async function init() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a1a);
+    scene.background = new THREE.Color(settings.bgColor);
     
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.15); // Уменьшено с 0.3
     scene.add(hemiLight);
@@ -1671,13 +1772,15 @@ async function init() {
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.1); // Уменьшено с 0.2
     scene.add(ambientLight);
     
-    const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.25); // Уменьшено с 0.5
-    directionalLight1.position.set(1, 1, 1);
-    scene.add(directionalLight1);
+    // Ключевой и заполняющий — единственные источники, которыми управляет панель
+    // настроек (азимут и высота солнца). Позиции ставит applySun().
+    sunLight = new THREE.DirectionalLight(0xffffff, 0.25); // Уменьшено с 0.5
+    scene.add(sunLight);
 
-    const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.15); // Уменьшено с 0.3
-    directionalLight2.position.set(-1, 0.5, -1);
-    scene.add(directionalLight2);
+    fillLight = new THREE.DirectionalLight(0xffffff, 0.15); // Уменьшено с 0.3
+    scene.add(fillLight);
+
+    applySun();
     
     const width = container.clientWidth;
     const height = container.clientHeight;
@@ -1696,8 +1799,7 @@ async function init() {
     renderer.setPixelRatio(cappedPixelRatio());
     renderer.setSize(width, height);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.8;
+    applyExposure();
     
     // Ни один источник не отбрасывает тени, поэтому карта теней сейчас только числится
     // включённой. Настоящие тени — этап B (статическая карта), там же и включим.
@@ -1791,9 +1893,13 @@ async function init() {
     window.addEventListener('resize', onWindowResize);
 
     createEnvironment();
-    
+
+    // Настройки применяем сразу после окружения: фон в режимах «градиент» и «HDRI»
+    // ссылается на уже собранную карту, а экспозиция и солнце видны и без модели.
+    applyAllSettings();
+
     // Загрузка модели по URL параметру теперь происходит только в DOMContentLoaded
-    
+
     loadModel();
 }
 
@@ -1838,22 +1944,17 @@ function loadHDR(hdrPath, pmremGenerator, rgbeLoader, hdrLoading) {
         
         document.getElementById('skipHDR').style.display = 'none';
         
-        // Увеличиваем интенсивность HDR текстуры
-        texture.intensity = 1.0; // Увеличиваем с 0.5 для более яркого освещения от HDR
-        
-        const pmremGeneratorOptions = pmremGenerator.fromEquirectangular(texture);
-        envMap = pmremGeneratorOptions.texture;
-        
-        scene.environment = envMap;
-        scene.background = new THREE.Color(0x1a1a1a);
-        
-        // Настраиваем тональное отображение для баланса яркости
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.0; // Увеличиваем с 0.7 для более яркого общего освещения
-        
-        texture.dispose();
+        // Исходную равнопромежуточную текстуру держим: из неё пересобирается PMREM
+        // при повороте окружения (в 0.159 нет scene.environmentRotation).
+        // Прежняя строка texture.intensity = 1.0 удалена — у THREE.Texture нет
+        // такого свойства, она ничего не делала, но выглядела настройкой яркости.
+        if (hdrSourceTexture && hdrSourceTexture !== texture) hdrSourceTexture.dispose();
+        hdrSourceTexture = texture;
+
         pmremGenerator.dispose();
-        
+        buildEnvironmentFromSource();
+        applyAllSettings();
+
         // Скрываем индикатор загрузки если это инициализация страницы
         const loadingElement = document.querySelector('.loading');
         if (loadingElement && loadingElement.textContent.includes('Загрузка карты окружения')) {
@@ -1873,11 +1974,120 @@ function loadHDR(hdrPath, pmremGenerator, rgbeLoader, hdrLoading) {
     });
 }
 
+// ─── Окружение, фон, туман ────────────────────────────────────────────────────
+// Исходная RGBE-текстура живёт до смены пресета: поворот окружения в 0.159
+// делается сдвигом UV по равнопромежуточной карте с пересборкой PMREM.
+let hdrSourceTexture = null;
+let gradientTexture = null;
+
+function buildEnvironmentFromSource() {
+    if (!hdrSourceTexture || !renderer || !scene) return;
+
+    hdrSourceTexture.wrapS = THREE.RepeatWrapping;
+    hdrSourceTexture.offset.x = (settings.envRotation % 360) / 360;
+    hdrSourceTexture.needsUpdate = true;
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const built = pmrem.fromEquirectangular(hdrSourceTexture).texture;
+    pmrem.dispose();
+
+    const previous = envMap;
+    envMap = built;
+    scene.environment = envMap;
+    applyBackground();
+    if (previous && previous !== envMap) previous.dispose();
+}
+
+// Пересборка PMREM — не бесплатная операция, поэтому ползунок поворота
+// перестраивает карту не на каждый тик, а через паузу после последнего движения.
+let envRotationTimer = null;
+
+function scheduleEnvironmentRebuild() {
+    if (envRotationTimer) clearTimeout(envRotationTimer);
+    envRotationTimer = setTimeout(() => {
+        envRotationTimer = null;
+        buildEnvironmentFromSource();
+    }, 200);
+}
+
+// Градиент — CanvasTexture 2x256: без шейдера и без alpha у рендерера, поэтому
+// preserveDrawingBuffer (то есть сохранение кадра) остаётся рабочим.
+function makeGradientTexture(top, bottom) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, top);
+    grad.addColorStop(1, bottom);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 2, 256);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+}
+
+function applyBackground() {
+    if (!scene) return;
+
+    const previousGradient = gradientTexture;
+    gradientTexture = null;
+
+    if (settings.background === 'hdri' && envMap) {
+        scene.background = envMap;
+        // Оба свойства есть в 0.159. backgroundRotation — нет, поэтому фон
+        // не следует за поворотом окружения; это известное ограничение версии.
+        scene.backgroundBlurriness = settings.bgBlur;
+        scene.backgroundIntensity = settings.bgIntensity;
+    } else if (settings.background === 'gradient') {
+        gradientTexture = makeGradientTexture(settings.bgTop, settings.bgBottom);
+        scene.background = gradientTexture;
+        scene.backgroundBlurriness = 0;
+        scene.backgroundIntensity = 1;
+    } else {
+        scene.background = new THREE.Color(settings.bgColor);
+        scene.backgroundBlurriness = 0;
+        scene.backgroundIntensity = 1;
+    }
+
+    if (previousGradient) previousGradient.dispose();
+}
+
+function applyFog() {
+    if (!scene) return;
+    const had = !!scene.fog;
+
+    if (settings.fog) {
+        // Дальность считаем от габарита модели: в абсолютных единицах она
+        // бессмысленна — каждая модель нормализуется в куб 200, но смотрят их
+        // с разных дистанций. Плотность — множитель поверх этого.
+        const radius = modelViewRadius();
+        const density = Math.max(0.1, settings.fogDensity);
+        scene.fog = new THREE.Fog(
+            new THREE.Color(settings.fogColor),
+            radius * 1.5 / density,
+            radius * 8 / density
+        );
+    } else {
+        scene.fog = null;
+    }
+
+    // Появление и исчезновение тумана меняет шейдер материала — без пересборки
+    // программы он либо не проявится, либо не уйдёт.
+    if (had !== !!scene.fog) {
+        eachModelMaterial((material) => { material.needsUpdate = true; });
+    }
+}
+
 // Функция для смены HDR карты
 function changeHDR(index) {
     if (index < 0 || index >= HDR_MAPS.length) return;
     
     currentHdrIndex = index;
+    settings.hdrIndex = index;
+    saveSettings();
     hdrRequested = true; // выбор пользователя важнее отложенной автозагрузки
 
     // Обновляем UI, чтобы отметить активную карту
@@ -1895,127 +2105,259 @@ function changeHDR(index) {
 }
 
 // Функция для создания интерфейса HDR
-function setupHDRInterface() {
-    // Получаем существующий контейнер режимов отображения
-    const displayModeContainer = document.getElementById('display-mode');
-    if (!displayModeContainer) return;
-    
-    // Полностью очищаем контейнер перед добавлением новых элементов
-    displayModeContainer.innerHTML = '';
-    
-    // Ширину и отступы задаёт CSS: инлайновые 480-550px остались от двух колонок,
-    // вторая («Отображение») удалена вместе с режимами отображения, и панель из трёх
-    // кнопок растягивалась на пустое место, а на телефоне её было не ужать.
-    displayModeContainer.style.display = 'flex';
-    
-    // Создаем правую часть для HDR кнопок
-    const displayModeRight = document.createElement('div');
-    displayModeRight.className = 'display-mode-right';
-    displayModeRight.style.display = 'flex';
-    displayModeRight.style.flexDirection = 'column';
-    displayModeRight.style.gap = '12px';
-    displayModeRight.style.flex = '1';
-    
-    // Добавляем заголовок для освещения
-    const hdrTitle = document.createElement('div');
-    hdrTitle.textContent = 'Освещение';
-    hdrTitle.style.fontSize = '14px';
-    hdrTitle.style.fontWeight = '500';
-    hdrTitle.style.marginBottom = '10px';
-    hdrTitle.style.textAlign = 'center';
-    hdrTitle.style.width = '100%';
-    hdrTitle.style.color = 'white';
-    displayModeRight.appendChild(hdrTitle);
-    
-    // Добавляем контейнер для кнопок HDR
-    const hdrButtons = document.createElement('div');
-    hdrButtons.id = 'hdr-buttons';
-    hdrButtons.style.display = 'flex';
-    hdrButtons.style.flexDirection = 'column';
-    hdrButtons.style.gap = '8px';
-    hdrButtons.style.width = '100%';
-    displayModeRight.appendChild(hdrButtons);
-    
-    // Добавляем кнопки для каждой HDR карты
-    HDR_MAPS.forEach((hdr, index) => {
+// ─── Панель настроек ──────────────────────────────────────────────────────────
+// Заняла место панели «Отображение / Освещение»: та собиралась тем же способом
+// (innerHTML контейнера #display-mode перезаписывается целиком), но умела только
+// переключать HDR. Панель скрыта по умолчанию и открывается кнопкой «Настройки».
+
+function settingsSection(title) {
+    const section = document.createElement('div');
+    section.className = 'settings-section';
+
+    const heading = document.createElement('div');
+    heading.className = 'settings-heading';
+    heading.textContent = title;
+    section.appendChild(heading);
+
+    return section;
+}
+
+function settingsRow(section, label) {
+    const row = document.createElement('div');
+    row.className = 'settings-row';
+
+    const caption = document.createElement('span');
+    caption.className = 'settings-label';
+    caption.textContent = label;
+    row.appendChild(caption);
+
+    section.appendChild(row);
+    return row;
+}
+
+// Ползунок. onInput зовётся на каждое движение (дёшево), onDone — на отпускании
+// (для дорогого: пересборка PMREM).
+function addSlider(section, label, key, min, max, step, onInput, onDone) {
+    const row = settingsRow(section, label);
+
+    const value = document.createElement('span');
+    value.className = 'settings-value';
+
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = min;
+    input.max = max;
+    input.step = step;
+    input.value = settings[key];
+
+    const show = () => { value.textContent = Number(settings[key]).toFixed(step < 1 ? 2 : 0); };
+    show();
+
+    input.addEventListener('input', () => {
+        settings[key] = parseFloat(input.value);
+        show();
+        if (onInput) onInput();
+    });
+    input.addEventListener('change', () => {
+        saveSettings();
+        if (onDone) onDone();
+    });
+
+    row.appendChild(value);
+    row.appendChild(input);
+    return input;
+}
+
+function addToggle(section, label, key, onChange) {
+    const row = settingsRow(section, label);
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'settings-toggle';
+    input.checked = !!settings[key];
+
+    input.addEventListener('change', () => {
+        settings[key] = input.checked;
+        saveSettings();
+        if (onChange) onChange();
+    });
+
+    row.appendChild(input);
+    return input;
+}
+
+function addColor(section, label, key, onChange) {
+    const row = settingsRow(section, label);
+
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'settings-color';
+    input.value = settings[key];
+
+    input.addEventListener('input', () => {
+        settings[key] = input.value;
+        if (onChange) onChange();
+    });
+    input.addEventListener('change', saveSettings);
+
+    row.appendChild(input);
+    return input;
+}
+
+// Ряд взаимоисключающих кнопок (пресеты освещения, режим фона)
+function addChoice(section, options, isActive, onPick, extraClass) {
+    const group = document.createElement('div');
+    group.className = 'settings-choice';
+
+    options.forEach((option) => {
         const button = document.createElement('button');
-        button.className = 'display-mode-btn hdr-btn';
-        button.dataset.hdrIndex = index;
-        button.textContent = hdr.name;
-        
-        // Добавляем класс active для текущей HDR карты
-        if (index === currentHdrIndex) {
+        button.className = 'display-mode-btn' + (extraClass ? ' ' + extraClass : '');
+        button.textContent = option.name;
+        button.dataset.value = option.value;
+        if (isActive(option.value)) button.classList.add('active');
+
+        button.addEventListener('click', () => {
+            group.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
             button.classList.add('active');
-        }
-        
-        // Добавляем обработчик клика
-        button.addEventListener('click', function() {
-            const currentHdrButton = hdrButtons.querySelector('.hdr-btn.active');
-            if (currentHdrButton) {
-                currentHdrButton.classList.remove('active');
-            }
-            
-            button.classList.add('active');
-            changeHDR(index);
+            onPick(option.value);
         });
-        
-        hdrButtons.appendChild(button);
+
+        group.appendChild(button);
     });
-    
-    // Колонка «Отображение» удалена вместе с режимами; осталось освещение
-    displayModeContainer.appendChild(displayModeRight);
-    
-    // Добавляем обработку нажатия клавиш для переключения HDR
-    document.addEventListener('keydown', function(e) {
-        // Клавиши 4, 5, 6 для переключения HDR
-        if (e.key >= '4' && e.key <= '6') {
-            const index = parseInt(e.key) - 4;
-            if (index >= 0 && index < HDR_MAPS.length) {
-                // Находим и симулируем клик на соответствующей кнопке
-                const hdrBtn = document.querySelector(`.hdr-btn[data-hdr-index="${index}"]`);
-                if (hdrBtn) hdrBtn.click();
-            }
+
+    section.appendChild(group);
+    return group;
+}
+
+function setupSettingsPanel() {
+    const panel = document.getElementById('display-mode');
+    if (!panel) return;
+
+    panel.innerHTML = '';
+
+    // ── Освещение ────────────────────────────────────────────────────────────
+    const light = settingsSection('Освещение');
+    addChoice(
+        light,
+        HDR_MAPS.map((hdr, index) => ({ name: hdr.name, value: index })),
+        (value) => value === currentHdrIndex,
+        (value) => changeHDR(value),
+        'hdr-btn'
+    );
+    addSlider(light, 'Яркость', 'exposure', 0.3, 2.5, 0.05, applyExposure);
+    addSlider(light, 'Сила окружения', 'envIntensity', 0, 2, 0.05, applyMaterialSettings);
+    // Поворот окружения пересобирает PMREM, поэтому только на отпускании
+    addSlider(light, 'Поворот окружения', 'envRotation', 0, 360, 1, null, scheduleEnvironmentRebuild);
+    addSlider(light, 'Азимут солнца', 'sunAzimuth', 0, 360, 1, applySun);
+    addSlider(light, 'Высота солнца', 'sunElevation', -10, 90, 1, applySun);
+    panel.appendChild(light);
+
+    // ── Отображение ──────────────────────────────────────────────────────────
+    const display = settingsSection('Отображение');
+    addToggle(display, 'Двусторонний рендер', 'doubleSided', applyMaterialSettings);
+    addToggle(display, 'Прозрачность по маске', 'maskedTransparency', applyMaterialSettings);
+    panel.appendChild(display);
+
+    // ── Фон ──────────────────────────────────────────────────────────────────
+    const background = settingsSection('Фон');
+    addChoice(
+        background,
+        [
+            { name: 'Цвет', value: 'color' },
+            { name: 'Градиент', value: 'gradient' },
+            { name: 'HDRI', value: 'hdri' }
+        ],
+        (value) => value === settings.background,
+        (value) => {
+            settings.background = value;
+            saveSettings();
+            applyBackground();
+            applyFog();
+            setupSettingsPanel(); // набор контролов зависит от режима
         }
-    });
-    
-    // Добавляем информацию в панель помощи
+    );
+
+    if (settings.background === 'color') {
+        addColor(background, 'Цвет фона', 'bgColor', () => { applyBackground(); applyFog(); });
+    } else if (settings.background === 'gradient') {
+        addColor(background, 'Сверху', 'bgTop', applyBackground);
+        addColor(background, 'Снизу', 'bgBottom', () => { applyBackground(); applyFog(); });
+    } else {
+        addSlider(background, 'Размытие', 'bgBlur', 0, 1, 0.05, applyBackground);
+        addSlider(background, 'Яркость фона', 'bgIntensity', 0, 3, 0.05, applyBackground);
+    }
+
+    addToggle(background, 'Туман', 'fog', () => { applyFog(); setupSettingsPanel(); });
+    if (settings.fog) {
+        addColor(background, 'Цвет тумана', 'fogColor', applyFog);
+        addSlider(background, 'Плотность тумана', 'fogDensity', 0.2, 3, 0.05, applyFog);
+    }
+    panel.appendChild(background);
+
+    // ── Сброс ────────────────────────────────────────────────────────────────
+    const reset = document.createElement('button');
+    reset.className = 'display-mode-btn settings-reset';
+    reset.textContent = 'Сбросить настройки';
+    reset.addEventListener('click', resetSettings);
+    panel.appendChild(reset);
+
     updateHelpPanel();
 }
 
-// Функция для обновления панели помощи
+function toggleSettingsPanel(force) {
+    const panel = document.getElementById('display-mode');
+    const button = document.getElementById('toggle-settings');
+    if (!panel) return;
+
+    const visible = typeof force === 'boolean' ? force : !panel.classList.contains('visible');
+    panel.classList.toggle('visible', visible);
+    if (button) button.classList.toggle('active', visible);
+}
+
+// Клавиши 1..N переключают пресеты освещения. Раньше это были 4/5/6 под три карты;
+// карт стало две, а цифры с единицы не заняты ничем другим.
+function handleSettingsHotkeys(event) {
+    if (event.target && (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA')) return;
+
+    const index = parseInt(event.key, 10) - 1;
+    if (Number.isInteger(index) && index >= 0 && index < HDR_MAPS.length) {
+        changeHDR(index);
+    }
+}
+
+// Справка: раздел с пресетами освещения. Прежняя версия собирала секцию,
+// но никуда её не вставляла — то есть была мертва.
 function updateHelpPanel() {
     const helpPanel = document.getElementById('help-panel');
     if (!helpPanel) return;
-    
-    // Проверяем, существует ли уже раздел с HDR
-    let hdrSection = Array.from(helpPanel.querySelectorAll('h4')).find(h4 => h4.textContent === 'Освещение');
-    
-    if (!hdrSection) {
-        // Создаем новый раздел для HDR
-        const section = document.createElement('div');
-        section.className = 'help-section';
-        
-        const title = document.createElement('h4');
-        title.textContent = 'Освещение';
-        section.appendChild(title);
-        
-        // Добавляем описания для каждой HDR карты
-        HDR_MAPS.forEach((hdr, index) => {
-            const row = document.createElement('div');
-            row.className = 'help-row';
-            
-            const nameSpan = document.createElement('span');
-            nameSpan.textContent = hdr.name;
-            
-            const keySpan = document.createElement('span');
-            keySpan.textContent = (index + 4).toString();
-            
-            row.appendChild(nameSpan);
-            row.appendChild(keySpan);
-            
-            section.appendChild(row);
-        });
-    }
+
+    const existing = helpPanel.querySelector('.help-section[data-section="light"]');
+    if (existing) existing.remove();
+
+    const section = document.createElement('div');
+    section.className = 'help-section';
+    section.dataset.section = 'light';
+
+    const title = document.createElement('h4');
+    title.textContent = 'Освещение';
+    section.appendChild(title);
+
+    HDR_MAPS.forEach((hdr, index) => {
+        const row = document.createElement('div');
+        row.className = 'help-row';
+
+        const name = document.createElement('span');
+        name.textContent = hdr.name + ':';
+
+        const key = document.createElement('span');
+        key.textContent = String(index + 1);
+
+        row.appendChild(name);
+        row.appendChild(key);
+        section.appendChild(row);
+    });
+
+    helpPanel.appendChild(section);
 }
 
 function createBasicEnvironment(pmremGenerator) {
@@ -2037,9 +2379,9 @@ function createBasicEnvironment(pmremGenerator) {
     envScene.add(light2);
     
     // Добавляем дополнительный мягкий свет снизу для лучшей детализации в тенях
-    const fillLight = new THREE.DirectionalLight(0xffffee, 0.5);
-    fillLight.position.set(0, -5, 0);
-    envScene.add(fillLight);
+    const envFillLight = new THREE.DirectionalLight(0xffffee, 0.5);
+    envFillLight.position.set(0, -5, 0);
+    envScene.add(envFillLight);
     
 
     envMap = pmremGenerator.fromScene(envScene).texture;
@@ -2388,10 +2730,12 @@ async function loadModel() {
                         // Упрощаем настройки для прозрачных объектов, как в оригинальной версии
                         object.renderOrder = 1;
                         
-                        // Упрощаем настройки для прозрачных материалов
-                        object.material.depthWrite = true;
-                        object.material.depthTest = true;
-                        object.material.alphaTest = 0.5;
+                        // Прежде здесь всем прозрачным материалам ставили
+                        // alphaTest = 0.5 и depthWrite = true, то есть полупрозрачность
+                        // вырождалась в вырезание по маске: стекло и сетки шли жёсткой
+                        // кромкой. Настройки прозрачности теперь берутся из файла,
+                        // а прежнее поведение осталось флагом отката
+                        // (settings.maskedTransparency, см. applyMaterialSettings).
                     } else {
                         opaqueObjects.push(object);
                         object.renderOrder = 0;
@@ -2416,24 +2760,11 @@ async function loadModel() {
                 sendTelemetry('ok');
             }));
 
-            // Гарантируем одностороннее отображение всех материалов
-            forceFrontSideMaterials();
-            
-            // Устанавливаем одинаковую интенсивность отражений для всех материалов
-            model.traverse((node) => {
-            if (node.isMesh && node.material) {
-                if (Array.isArray(node.material)) {
-                    node.material.forEach(mat => {
-                        if (typeof mat.envMapIntensity !== 'undefined') {
-                            mat.envMapIntensity = 0.5; // Контролируем интенсивность отражений
-                        }
-                    });
-                } else if (typeof node.material.envMapIntensity !== 'undefined') {
-                    node.material.envMapIntensity = 0.5; // Контролируем интенсивность отражений
-                }
-            }
-        });
-        
+            // Сторона, прозрачность, сила окружения и анизотропия — одним проходом
+            prepareModelMaterials();
+            // Дальность тумана считается от габарита, поэтому пересчитываем на новой модели
+            applyFog();
+
         saveOriginalMaterialsState();
         
         // Новая модель — новое кадрирование: до первого жеста им снова управляем мы
@@ -2491,59 +2822,9 @@ async function loadModel() {
     }
 }
 
-function processEmbeddedMaterial(material, meshName) {
-    const processedMaterial = material.clone();
-
-    processedMaterial.envMap = envMap;
-    processedMaterial.envMapIntensity = 0.5; // Уменьшаем с 1.0 для снижения интенсивности отражений
-    processedMaterial.side = THREE.FrontSide;
-    processedMaterial.transparent = material.transparent;
-    processedMaterial.depthWrite = true;
-    
-    // Настройки для прозрачных материалов - из оригинальной версии
-    if (material.transparent) {
-        processedMaterial.alphaTest = 0.5;
-        processedMaterial.depthWrite = true;
-    }
-    
-    // Базовые настройки для всех типов материалов
-    if (processedMaterial.map) {
-        processedMaterial.map.colorSpace = THREE.SRGBColorSpace;
-        processedMaterial.map.minFilter = THREE.LinearFilter;
-        processedMaterial.map.magFilter = THREE.LinearFilter;
-        processedMaterial.map.generateMipmaps = true;
-    }
-    
-    // Улучшенная обработка карт нормалей и других текстур
-    if (processedMaterial.normalMap) {
-        processedMaterial.normalMap.colorSpace = THREE.NoColorSpace;
-        processedMaterial.normalMap.minFilter = THREE.LinearFilter;
-        processedMaterial.normalMap.magFilter = THREE.LinearFilter;
-    }
-            
-    if (processedMaterial.metalnessMap) {
-        processedMaterial.metalnessMap.colorSpace = THREE.NoColorSpace;
-        processedMaterial.metalnessMap.minFilter = THREE.LinearFilter;
-        processedMaterial.metalnessMap.magFilter = THREE.LinearFilter;
-    }
-            
-    if (processedMaterial.roughnessMap) {
-        processedMaterial.roughnessMap.colorSpace = THREE.NoColorSpace;
-        processedMaterial.roughnessMap.minFilter = THREE.LinearFilter;
-        processedMaterial.roughnessMap.magFilter = THREE.LinearFilter;
-    }
-
-    // Если у материала нет карты шероховатости, увеличиваем базовую шероховатость 
-    // для дальнейшего снижения резкости отражений
-    if (!processedMaterial.roughnessMap && typeof processedMaterial.roughness !== 'undefined') {
-        const currentRoughness = processedMaterial.roughness;
-        processedMaterial.roughness = Math.min(currentRoughness + 0.15, 1.0);
-    }
-
-    processedMaterial.needsUpdate = true;
-    
-    return processedMaterial;
-}
+// processEmbeddedMaterial() удалена: её никто не вызывал, а делала она ровно то,
+// что чинит этап A, — прибивала side = FrontSide, alphaTest = 0.5 и envMapIntensity.
+// Настройка текстур из неё переехала в prepareModelMaterials().
 
 function onWindowResize() {
     const width = container.clientWidth;
@@ -2735,8 +3016,13 @@ function setupUI() {
     // Проверяем видимость кнопки загрузки в конце настройки UI
     setTimeout(checkAndHideUploadButton, 100);
     
-    // Добавляем интерфейс HDR
-    setupHDRInterface();
+    // Панель настроек и кнопка, которая её открывает
+    setupSettingsPanel();
+
+    const settingsButton = document.getElementById('toggle-settings');
+    if (settingsButton) settingsButton.addEventListener('click', () => toggleSettingsPanel());
+
+    document.addEventListener('keydown', handleSettingsHotkeys);
     
     // Настраиваем кнопки управления анимацией
     setupAnimationControls();
@@ -3418,7 +3704,7 @@ function collectMaterials() {
 function saveOriginalMaterialProps(material) {
     originalMaterialProps.set(material, {
         wireframe: material.wireframe,
-        side: THREE.FrontSide, // Принудительно сохраняем как одностороннее отображение
+        side: material.side, // была константа FrontSide — восстановить исходную сторону было нечем
         map: material.map,
         normalMap: material.normalMap,
         roughnessMap: material.roughnessMap,
@@ -4446,23 +4732,79 @@ function toggleModelManageButton(show) {
 }
 
 // Функция для принудительной установки всех материалов как односторонних
-function forceFrontSideMaterials() {
+// ─── Материалы модели ─────────────────────────────────────────────────────────
+// Снимок того, что пришло из файла. Раньше сторона и настройки прозрачности
+// затирались константами прямо при загрузке (side = FrontSide, alphaTest = 0.5),
+// и вернуть исходное было нечем: растительность рвалась, стекло шло по маске.
+const fileMaterialState = new Map();
+
+function eachModelMaterial(fn) {
     if (!model) return;
-    
-    console.log('Применение одностороннего отображения для всех материалов...');
-    
     model.traverse((node) => {
-        if (node.isMesh && node.material) {
-            if (Array.isArray(node.material)) {
-                node.material.forEach(material => {
-                    material.side = THREE.FrontSide;
-                    material.needsUpdate = true;
-                });
-            } else {
-                node.material.side = THREE.FrontSide;
-                node.material.needsUpdate = true;
+        if (!node.isMesh || !node.material) return;
+        const list = Array.isArray(node.material) ? node.material : [node.material];
+        list.forEach(fn);
+    });
+}
+
+const ANISO_MAPS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap',
+                    'aoMap', 'emissiveMap', 'alphaMap'];
+
+function prepareModelMaterials() {
+    if (!model || !renderer) return;
+
+    fileMaterialState.clear();
+    // Анизотропия не ставилась нигде, и полы, фасады и дороги под скользящим углом
+    // мылились в кашу. Выше восьми разница уже не видна, а цена растёт.
+    const anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+
+    eachModelMaterial((material) => {
+        if (fileMaterialState.has(material)) return;
+
+        fileMaterialState.set(material, {
+            side: material.side,
+            transparent: material.transparent,
+            alphaTest: material.alphaTest,
+            depthWrite: material.depthWrite
+        });
+
+        for (const key of ANISO_MAPS) {
+            const texture = material[key];
+            if (texture && texture.isTexture && texture.anisotropy !== anisotropy) {
+                texture.anisotropy = anisotropy;
+                texture.needsUpdate = true;
             }
         }
+    });
+
+    applyMaterialSettings();
+}
+
+// Тумблеры «двусторонний рендер» и «прозрачность по маске» плюс сила окружения.
+// Всё, чего нет в снимке, оставляем как есть — материал мог прийти не из модели.
+function applyMaterialSettings() {
+    eachModelMaterial((material) => {
+        const fromFile = fileMaterialState.get(material);
+
+        material.side = settings.doubleSided
+            ? THREE.DoubleSide
+            : (fromFile ? fromFile.side : material.side);
+
+        if (fromFile) {
+            if (settings.maskedTransparency && fromFile.transparent) {
+                material.alphaTest = 0.5;
+                material.depthWrite = true;
+            } else {
+                material.alphaTest = fromFile.alphaTest;
+                material.depthWrite = fromFile.depthWrite;
+            }
+        }
+
+        if (typeof material.envMapIntensity !== 'undefined') {
+            material.envMapIntensity = settings.envIntensity;
+        }
+
+        material.needsUpdate = true;
     });
 }
 
@@ -5205,6 +5547,9 @@ function exportFunctions() {
 // Инициализируем обработчики после загрузки DOM
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('🚀 Инициализация 3D просмотрщика...');
+
+    // Настройки читаем до init(): от них зависят экспозиция, фон и выбранный пресет
+    loadSettings();
     
     // Проверяем совместимость с HTML функциями
     if (typeof window.toggleHelpPanel === 'function') {
@@ -5370,14 +5715,8 @@ function updateAuthUI() {
 
 // Функция для обновления интерфейса HDR
 function updateHDRInterface() {
-    const hdrButtons = document.querySelectorAll('.hdr-btn');
-    
-    hdrButtons.forEach((button, index) => {
-        if (index === currentHdrIndex) {
-            button.classList.add('active');
-        } else {
-            button.classList.remove('active');
-        }
+    document.querySelectorAll('.hdr-btn').forEach((button) => {
+        button.classList.toggle('active', Number(button.dataset.value) === currentHdrIndex);
     });
 }
 

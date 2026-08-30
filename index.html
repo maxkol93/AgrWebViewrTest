@@ -46,26 +46,71 @@
             z-index: 1000;
         }
         #controls {position:absolute;bottom:20px;left:20px;z-index:1000;background-color:rgba(0,0,0,0.75);color:white;padding:12px 16px;border-radius:8px;display:flex;flex-direction:row;gap:12px;opacity:0.9;transition:opacity 0.3s,transform 0.2s;transform:translateY(0);box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+        /* Панель настроек. Живёт на прежнем контейнере панели «Отображение»,
+           но теперь скрыта по умолчанию и открывается кнопкой «Настройки»:
+           контролов стало на порядок больше, постоянно занимать ими экран незачем. */
         #display-mode {
             position: absolute;
             top: auto;
-            bottom: 100px;
+            bottom: 76px;
             left: 20px;
-            /* Панель из трёх кнопок «Освещение»: без минимума она сжимается в
-               столбик шириной по слову «День» */
-            min-width: 130px;
+            width: 260px;
+            max-height: min(60vh, 520px);
+            overflow-y: auto;
             z-index: 1000;
-            background-color: rgba(0,0,0,0.75);
+            background-color: rgba(0,0,0,0.85);
             color: white;
-            padding: 12px 16px;
+            padding: 14px;
             border-radius: 8px;
-            display: flex;
+            box-sizing: border-box;
+            display: none;
             flex-direction: column;
-            gap: 10px;
-            opacity: 0.9;
-            transition: opacity 0.3s, transform 0.2s;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            gap: 14px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+            scrollbar-width: thin;
+            scrollbar-color: #4285f4 rgba(0,0,0,0.3);
         }
+        #display-mode.visible { display: flex; }
+        /* Помощь и настройки занимают одну зону экрана — вместе не показываем */
+        .help-visible #display-mode { display: none !important; }
+        #display-mode::-webkit-scrollbar { width: 6px; }
+        #display-mode::-webkit-scrollbar-track { background: rgba(0,0,0,0.3); border-radius: 4px; }
+        #display-mode::-webkit-scrollbar-thumb { background-color: #4285f4; border-radius: 4px; }
+
+        .settings-section { display: flex; flex-direction: column; gap: 8px; }
+        .settings-heading {
+            font-size: 13px;
+            font-weight: 600;
+            color: #4285f4;
+            border-bottom: 1px solid rgba(66,133,244,0.3);
+            padding-bottom: 5px;
+        }
+        .settings-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            align-items: center;
+            gap: 6px 8px;
+            font-size: 12px;
+        }
+        .settings-label { color: #ccc; }
+        .settings-value { color: #FFC107; font-variant-numeric: tabular-nums; }
+        /* Ползунок занимает всю ширину строки под подписью и значением */
+        .settings-row input[type="range"] {
+            grid-column: 1 / -1;
+            width: 100%;
+            margin: 0;
+            accent-color: #4285f4;
+        }
+        .settings-toggle { width: 16px; height: 16px; margin: 0; accent-color: #4285f4; }
+        .settings-color {
+            width: 40px; height: 22px; padding: 0;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 4px; background: none; cursor: pointer;
+        }
+        .settings-choice { display: flex; gap: 6px; }
+        .settings-choice .display-mode-btn { flex: 1 1 0; min-width: 0; padding: 7px 4px; font-size: 12px; }
+        .settings-reset { width: 100%; }
+
         #help-icon {
             position: absolute;
             top: 20px;
@@ -167,8 +212,6 @@
         }
         
         button.control-btn {font-family:'Unbounded',sans-serif;font-weight:500;background-color:#4285f4;color:white;border:none;border-radius:6px;padding:10px 18px;cursor:pointer;font-size:14px;transition:background-color 0.2s,transform 0.1s;letter-spacing:0.2px;box-shadow:0 2px 5px rgba(0,0,0,0.2);-webkit-tap-highlight-color:rgba(66,133,244,0.3)}
-        #display-mode h4 {font-size:14px;font-weight:500;margin:0 0 8px 0;text-align:center}
-        #display-mode-buttons {display:flex;flex-direction:column;gap:8px}
         .display-mode-btn {font-family:'Unbounded',sans-serif;font-weight:500;color:white;border:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;text-align:center;transition:background-color 0.2s,transform 0.1s;background-color:#333333;-webkit-tap-highlight-color:rgba(66,133,244,0.3)}
         #help-panel h3 {margin-top:0;font-size:22px;font-weight:600;margin-bottom:20px;color:#4285f4;text-align:center}
         #help-panel h4 {font-size:16px;font-weight:500;margin:0 0 12px 0;color:#4285f4;border-bottom:1px solid rgba(66,133,244,0.3);padding-bottom:8px}
@@ -273,7 +316,7 @@
         /* Стили для полноэкранного режима */
         .fullscreen-mode #model-selector,
         .fullscreen-mode #controls,
-        .fullscreen-mode #display-mode,
+        .fullscreen-mode #display-mode.visible,
         .fullscreen-mode #help-icon,
         .fullscreen-mode #custom-model-upload,
         .fullscreen-mode #upload-model-container,
@@ -389,38 +432,12 @@
             left: -9999px !important;
         }
         
-        /* Стили для разделов внутри блока display-mode */
-        .display-mode-left, .display-mode-right {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        /* Стили для кнопок */
         .hdr-btn.active {
             background-color: #4285f4 !important;
             color: white !important;
             font-weight: bold !important;
-            box-shadow: 0 0 12px rgba(66, 133, 244, 0.8) !important;
-            border: 1px solid white !important; /* Уменьшаем с 2px до 1px */
-        }
-
-        /* Дополнительные стили для HDR кнопок, чтобы они не зависели от режимов отображения */
-        .display-mode-right .display-mode-btn.active {
-            background-color: #4285f4 !important;
-            color: white !important;
-            font-weight: bold !important;
-            box-shadow: 0 0 12px rgba(66, 133, 244, 0.8) !important;
-            border: 1px solid white !important; /* Уменьшаем с 2px до 1px */
-        }
-
-        /* Отдельные стили для кнопок в левой части, чтобы они не влияли на правую */
-        .display-mode-left .display-mode-btn.active {
-            background-color: #4285f4 !important;
-            color: white !important;
-            font-weight: bold !important;
-            box-shadow: 0 0 12px rgba(66, 133, 244, 0.8) !important;
-            border: 1px solid white !important; /* Уменьшаем с 2px до 1px */
+            box-shadow: 0 0 12px rgba(66,133,244,0.8) !important;
+            border: 1px solid white !important;
         }
 
         /* ── Модальные окна (загрузка модели / админ-панель) ────────── */
@@ -693,14 +710,6 @@
             top: -9999px !important;
         }
 
-        /* Панель освещения осталась одноколоночной (заголовок + три кнопки).
-           Прежние правила растягивали её в ряд из двух колонок под 400px шириной —
-           вторая колонка («Отображение») удалена вместе с режимами отображения,
-           размеры теперь приходят из базового правила #display-mode. */
-        .display-mode-right > div:first-child {
-            text-align: center;
-            font-weight: 600;
-        }
 
         /* ── Мобильная раскладка ─────────────────────────────────────
            Четыре непересекающиеся зоны: сверху слева выбор модели, сверху справа
@@ -802,44 +811,35 @@
                 white-space: nowrap;
             }
 
-            /* Освещение — строкой прямо над панелью управления */
+            /* Настройки на телефоне — лист во всю ширину над панелью управления.
+               Прокручивается сам, высоту ограничиваем так, чтобы выбор модели
+               сверху оставался виден. */
             #display-mode {
                 top: auto;
                 bottom: 58px;
                 left: 8px;
                 right: 8px;
-                flex-direction: row !important;
-                gap: 6px !important;
-                padding: 8px !important;
-                min-width: 0 !important;
-                max-width: none !important;
-                width: auto !important;
-                background-color: rgba(0,0,0,0.85);
+                width: auto;
+                /* Не больше сорока пяти процентов высоты: настройки крутят картинку,
+                   и видеть её во время этого обязательно. Остальное прокручивается. */
+                max-height: 45vh;
+                padding: 12px;
+                gap: 12px;
                 border-radius: 10px;
-                box-shadow: 0 4px 16px rgba(0,0,0,0.4);
             }
-            .display-mode-right {
-                flex-direction: row !important;
-                gap: 6px !important;
-                width: 100%;
-            }
-            /* Подпись «Освещение» на телефоне только съедает строку */
-            .display-mode-right > div:first-child { display: none !important; }
-            #hdr-buttons {
-                flex-direction: row !important;
-                gap: 6px !important;
-                width: 100%;
-            }
+            .settings-row { font-size: 12px; }
+            .settings-choice .display-mode-btn { padding: 8px 4px; font-size: 11px; }
             .display-mode-btn {
-                flex: 1 1 auto;
                 min-width: 0;
                 box-sizing: border-box;
-                padding: 9px 6px !important;
-                font-size: 11px !important;
-                white-space: nowrap !important;
+                white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
+            /* Тач-цели у ползунков и чекбоксов крупнее, чем их видимый размер */
+            .settings-row input[type="range"] { height: 22px; }
+            .settings-toggle { width: 20px; height: 20px; }
+            .settings-color { width: 46px; height: 26px; }
 
             #help-panel {
                 top: 54px;
@@ -882,8 +882,8 @@
                мелкие, а без них не переключить ни вид, ни освещение. Убираем его
                только когда поверх открыта помощь. */
             .fullscreen-mode #model-selector,
-            .fullscreen-mode #controls,
-            .fullscreen-mode #display-mode { display: flex !important; }
+            .fullscreen-mode #controls { display: flex !important; }
+            .fullscreen-mode #display-mode.visible { display: flex !important; }
             .fullscreen-mode #help-icon { display: block !important; }
             .fullscreen-mode.help-visible #model-selector,
             .fullscreen-mode.help-visible #controls,
@@ -893,8 +893,8 @@
             .help-visible #custom-model-upload { display: none !important; }
         }
 
-        /* Альбомная ориентация телефона: высоты мало, поэтому нижние панели встают
-           в один ряд — управление слева, освещение справа. */
+        /* Альбомная ориентация телефона: высоты мало — панель настроек уходит
+           вправо узкой колонкой, чтобы не наезжать на управление внизу слева. */
         @media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
             #controls {
                 right: auto;
@@ -903,11 +903,13 @@
             button.control-btn { flex: 0 0 auto; }
             #speed-control { flex: 0 0 auto; }
             #display-mode {
+                top: 56px;
                 bottom: 8px;
                 left: auto;
                 right: 8px;
+                width: 240px;
+                max-height: none;
             }
-            .display-mode-btn { flex: 0 0 auto; }
             #model-selector { max-width: min(240px, calc(100vw - 320px)); }
             #model-comment { display: none; }
             #help-panel {
@@ -940,6 +942,7 @@
             <button id="reset-camera" class="control-btn">Сброс камеры</button>
             <button id="top-view" class="control-btn">Вид сверху</button>
             <button id="toggle-control" class="control-btn">WASD управление</button>
+            <button id="toggle-settings" class="control-btn">Настройки</button>
             <div id="speed-control" style="display: none;">
                 <span>Скорость: <span id="speed-indicator">1.0</span></span>
             </div>
@@ -1312,7 +1315,6 @@
             const helpPanel = document.getElementById('help-panel');
             const modelSelector = document.getElementById('model-selector');
             const controls = document.getElementById('controls');
-            const displayMode = document.getElementById('display-mode');
             
             // Обрабатываем оба возможных ID элемента
             const uploadModelBtns = [
@@ -1379,9 +1381,6 @@
                 if (controls) {
                     controls.style.display = isHelpPanelVisible ? 'none' : 'flex';
                 }
-                if (displayMode) {
-                    displayMode.style.display = isHelpPanelVisible ? 'none' : 'flex';
-                }
                 
                 // Если закрываем панель помощи в полноэкранном режиме, принудительно восстанавливаем
                 // элементы интерфейса, так как они могли быть скрыты через !important атрибуты
@@ -1389,7 +1388,6 @@
                     setTimeout(() => {
                         if (modelSelector) modelSelector.setAttribute('style', 'display: flex !important');
                         if (controls) controls.setAttribute('style', 'display: flex !important');
-                        if (displayMode) displayMode.setAttribute('style', 'display: flex !important');
                     }, 10);
                 }
             }
@@ -1681,94 +1679,10 @@
                     window.fKeyHandlerAdded = true;
                 }
                 
-                // Фикс для кнопок HDR при переключении режимов отображения
-                fixHDRButtonsDisplay();
             } else {
                 // Повторяем попытку через небольшой промежуток времени
                 setTimeout(setupCameraControlsGlobally, 100);
             }
-        }
-        
-        // Функция для исправления проблемы с кнопками HDR
-        function fixHDRButtonsDisplay() {
-            // Храним последний активный индекс HDR
-            let lastActiveHDRIndex = 0;
-
-            // Обновляем сохраненный индекс HDR при клике на кнопку HDR
-            document.addEventListener('click', function(e) {
-                if (e.target && e.target.classList.contains('hdr-btn') && e.target.dataset.hdrIndex) {
-                    lastActiveHDRIndex = parseInt(e.target.dataset.hdrIndex);
-                    console.log('Сохраняем индекс HDR:', lastActiveHDRIndex);
-                }
-            });
-
-            // Наблюдаем за изменениями в дереве DOM
-            const observer = new MutationObserver(function(mutations) {
-                // Ищем изменения класса active у кнопок
-                mutations.forEach(function(mutation) {
-                    if (mutation.type === 'attributes' && 
-                        mutation.attributeName === 'class' &&
-                        mutation.target.classList.contains('display-mode-btn') &&
-                        !mutation.target.classList.contains('hdr-btn')) {
-                        
-                        // Если изменилась кнопка режима отображения, восстанавливаем активную HDR кнопку
-                        setTimeout(function() {
-                            restoreActiveHDRButton(lastActiveHDRIndex);
-                        }, 10);
-                    }
-                });
-            });
-            
-            // Функция для восстановления активной HDR кнопки с указанным индексом
-            function restoreActiveHDRButton(index) {
-                const hdrButtons = document.querySelectorAll('.hdr-btn');
-                const activeHDRExists = Array.from(hdrButtons).some(btn => btn.classList.contains('active'));
-                
-                if (!activeHDRExists && hdrButtons.length > 0) {
-                    // Находим кнопку с нужным индексом
-                    const targetButton = Array.from(hdrButtons).find(btn => 
-                        parseInt(btn.dataset.hdrIndex) === index
-                    );
-                    
-                    // Если кнопка найдена, активируем ее, иначе активируем первую
-                    const buttonToActivate = targetButton || hdrButtons[0];
-                    
-                    console.log('Восстанавливаем активную HDR кнопку с индексом:', 
-                        targetButton ? index : 0);
-                    
-                    buttonToActivate.classList.add('active');
-                    
-                    // Не вызываем changeHDR, чтобы не менять фактическое освещение
-                    // Мы только восстанавливаем визуальное состояние кнопки
-                }
-            }
-            
-            // Запускаем наблюдатель для всего документа
-            observer.observe(document.body, { 
-                childList: true, 
-                subtree: true, 
-                attributes: true,
-                attributeFilter: ['class']
-            });
-            
-            // Также добавляем обработчики на кнопки режимов отображения
-            document.querySelectorAll('.display-mode-btn:not(.hdr-btn)').forEach(button => {
-                button.addEventListener('click', function() {
-                    // При клике на кнопку режима, проверяем и восстанавливаем активную HDR кнопку
-                    setTimeout(function() {
-                        restoreActiveHDRButton(lastActiveHDRIndex);
-                    }, 50);
-                });
-            });
-
-            // Инициализируем lastActiveHDRIndex текущей активной кнопкой при запуске
-            setTimeout(function() {
-                const activeHDRButton = document.querySelector('.hdr-btn.active');
-                if (activeHDRButton && activeHDRButton.dataset.hdrIndex) {
-                    lastActiveHDRIndex = parseInt(activeHDRButton.dataset.hdrIndex);
-                    console.log('Начальный индекс HDR:', lastActiveHDRIndex);
-                }
-            }, 1000); // Даем время на загрузку интерфейса
         }
         
         // Запускаем настройку после загрузки DOM
