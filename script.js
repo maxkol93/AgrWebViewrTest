@@ -3811,14 +3811,18 @@ function orbitAroundPivot(yaw, pitch) {
     const pitchQuat = new THREE.Quaternion().setFromAxisAngle(right, pitch);
     const rotation = yawQuat.multiply(pitchQuat);
 
-    // В двухточечной перспективе тангаж ограничен сильнее полюсов: дальше сдвиг
-    // кадра растягивает картинку. Своё вращение полярные пределы OrbitControls
-    // не соблюдает, поэтому предел проверяем здесь отдельно.
-    const pitchLimit = twoPointView ? TWO_POINT_MAX_PITCH_SIN : 0.995;
-    const direction = camera.getWorldDirection(new THREE.Vector3()).applyQuaternion(rotation);
-    if (Math.abs(direction.y) > pitchLimit) {
-        // за пределом — оставляем только рыскание
+    if (twoPointView) {
+        // Камера остаётся горизонтальной: вертикальное движение мыши уходит
+        // в наклон кадра, а поворачиваем только по курсу.
+        twoPointPitch = THREE.MathUtils.clamp(twoPointPitch + pitch,
+                                              -TWO_POINT_MAX_PITCH, TWO_POINT_MAX_PITCH);
         rotation.copy(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw));
+    } else {
+        const direction = camera.getWorldDirection(new THREE.Vector3()).applyQuaternion(rotation);
+        if (Math.abs(direction.y) > 0.995) {
+            // слишком близко к полюсу — оставляем только рыскание
+            rotation.copy(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw));
+        }
     }
 
     const offset = camera.position.clone().sub(pivot).applyQuaternion(rotation);
@@ -4052,11 +4056,17 @@ function toggleTopView() {
 let twoPointView = false;
 let twoPointApplied = false;
 
-// Максимальный тангаж, при котором сдвиг ещё выглядит как перспектива, а не как
-// растяжка. Держим и в радианах (для пределов OrbitControls), и синусом
-// (для своего вращения — там под рукой направление взгляда, а не угол).
+// Наклон кадра. Именно величина, а не производная от controls.target: цель у нас
+// после каждого вращения садится на ось взгляда (см. orbitAroundPivot ещё с этапа K),
+// а взгляд здесь горизонтальный — значит наклон, посчитанный от цели, обнулялся бы
+// при первом же движении мыши. Первый кадр выходил верным, дальше вид «слетал»
+// вниз. Теперь наклон живёт сам по себе, а вертикальное перетаскивание меняет его
+// вместо тангажа камеры — ровно как шифт у объектива.
+let twoPointPitch = 0;
+
+// Максимальный наклон кадра, при котором сдвиг ещё читается как перспектива,
+// а не как растяжка.
 const TWO_POINT_MAX_PITCH = THREE.MathUtils.degToRad(35);
-const TWO_POINT_MAX_PITCH_SIN = Math.sin(TWO_POINT_MAX_PITCH);
 
 function setTwoPointView(enabled) {
     if (!controls || enabled === twoPointView) return;
@@ -4068,12 +4078,15 @@ function setTwoPointView(enabled) {
     twoPointView = enabled;
 
     if (enabled) {
-        controls.minPolarAngle = Math.PI / 2 - TWO_POINT_MAX_PITCH;
-        controls.maxPolarAngle = Math.PI / 2 + TWO_POINT_MAX_PITCH;
-        controls.update();
+        // Стартуем с того наклона, который человек уже набрал мышью: включение
+        // должно выпрямить вертикали, не меняя кадр.
+        const direction = camera.getWorldDirection(new THREE.Vector3());
+        const horizontal = Math.hypot(direction.x, direction.z);
+        twoPointPitch = horizontal > 1e-6
+            ? THREE.MathUtils.clamp(Math.atan2(direction.y, horizontal),
+                                    -TWO_POINT_MAX_PITCH, TWO_POINT_MAX_PITCH)
+            : 0;
     } else {
-        controls.minPolarAngle = 0;
-        controls.maxPolarAngle = Math.PI;
         if (camera && camera.isPerspectiveCamera) camera.clearViewOffset();
         twoPointApplied = false;
     }
@@ -4105,19 +4118,17 @@ function applyTwoPointView() {
         return;
     }
 
-    const target = controls.target;
-    const dx = target.x - camera.position.x;
-    const dy = target.y - camera.position.y;
-    const dz = target.z - camera.position.z;
-    const horizontal = Math.hypot(dx, dz);
+    // Выпрямляем камеру по её же курсу: направление взгляда кладём в горизонт.
+    const direction = camera.getWorldDirection(new THREE.Vector3());
+    if (Math.hypot(direction.x, direction.z) < 1e-6) return; // взгляд в надир, курса нет
 
-    // Взгляд строго в надир или зенит: горизонтального направления нет, выпрямлять
-    // нечего. Пределы тангажа сюда не пускают, но зум вплотную может.
-    if (horizontal < 1e-4) return;
+    camera.lookAt(
+        camera.position.x + direction.x,
+        camera.position.y,
+        camera.position.z + direction.z
+    );
 
-    camera.lookAt(camera.position.x + dx, camera.position.y, camera.position.z + dz);
-
-    const pitch = Math.atan2(dy, horizontal);
+    const pitch = twoPointPitch;
     const width = container.clientWidth || 1;
     const height = container.clientHeight || 1;
     const halfFov = THREE.MathUtils.degToRad(camera.fov) / 2;
