@@ -51,6 +51,9 @@
             top: auto;
             bottom: 100px;
             left: 20px;
+            /* Панель из трёх кнопок «Освещение»: без минимума она сжимается в
+               столбик шириной по слову «День» */
+            min-width: 130px;
             z-index: 1000;
             background-color: rgba(0,0,0,0.75);
             color: white;
@@ -346,159 +349,6 @@
         }
         
         #custom-file-upload {display:none}
-        @media (max-width:768px) {
-            #controls {flex-direction:column;gap:8px;bottom:10px;left:10px;padding:12px;background-color:rgba(0,0,0,0.85);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.4)}
-            button.control-btn {padding:12px 16px;font-size:12px;width:100%;position:relative;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:none;overflow:visible}
-            #display-mode {top:auto;bottom:10px;left:auto;right:10px;padding:12px;background-color:rgba(0,0,0,0.85);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.4);flex-direction:column}
-            #display-mode h4 {display:none}
-            #display-mode-buttons {flex-direction:column}
-            #model-selector {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 8px;
-                top: 10px;
-                left: 10px;
-                padding: 12px;
-                width: calc(100% - 180px);
-                max-width: 200px;
-                background-color: rgba(0,0,0,0.85);
-                border-radius: 10px;
-                box-shadow: 0 4px 16px rgba(0,0,0,0.4)
-            }
-            #model-selector label {display:none}
-            #share-model-btn, .display-mode-btn {padding:12px 16px;width:100%;position:relative;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:none;overflow:visible}
-            button.control-btn.active, #share-model-btn.active, .display-mode-btn.active {box-shadow:0 0 12px rgba(66,133,244,0.7);border:1px solid rgba(255,255,255,0.7);z-index:2}
-            #help-panel {width:85%;max-width:340px;top:55px;right:10px;padding:15px;font-size:13px;z-index:1500}
-            #help-icon {
-                top: 10px;
-                right: 65px;
-                width: 44px;
-                height: 44px;
-                line-height: 44px;
-                font-size: 18px;
-                z-index: 1500;
-                background-color: rgba(0,0,0,0.75);
-                box-shadow: 0 2px 10px rgba(0,0,0,0.5);
-            }
-            #help-icon:active {
-                background-color: #4285f4;
-            }
-            #custom-model-upload {
-                display: none !important;
-                visibility: hidden !important;
-                opacity: 0 !important;
-                pointer-events: none !important;
-            }
-            #file-upload-container {flex-direction:column;align-items:flex-start}
-            
-            /* Адаптация кнопок полноэкранного режима для мобильных устройств */
-            #fullscreen-btn, #exit-fullscreen-btn {
-                width: 44px;
-                height: 44px;
-                top: 10px;
-                right: 10px;
-                z-index: 2000;
-                position: fixed !important;
-                opacity: 0.95;
-                box-shadow: 0 2px 15px rgba(0,0,0,0.6);
-            }
-            
-            #fullscreen-btn {
-                display: flex !important;
-                visibility: visible !important;
-            }
-            
-            #exit-fullscreen-btn {
-                display: none !important;
-            }
-            
-            /* Для предотвращения проблем с выходом текста за пределы селекта модели */
-            #model-selector {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 8px;
-                top: 10px;
-                left: 10px;
-                padding: 12px;
-                width: calc(100% - 180px);
-                max-width: 200px;
-                background-color: rgba(0,0,0,0.85);
-                border-radius: 10px;
-                box-shadow: 0 4px 16px rgba(0,0,0,0.4)
-            }
-            
-            /* Специальные стили для select на мобильных устройствах */
-            #model-selector select {
-                width: 100%;
-                max-width: 100%;
-                padding: 10px;
-                font-size: 12px;
-                text-overflow: ellipsis;
-                overflow: hidden;
-                white-space: nowrap;
-                box-sizing: border-box;
-                -webkit-appearance: none;
-                -moz-appearance: none;
-                appearance: none;
-                background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>");
-                background-repeat: no-repeat;
-                background-position: right 5px top 50%;
-                padding-right: 30px;
-                position: relative;
-                z-index: 1;
-                border: 1px solid rgba(255,255,255,0.1);
-            }
-            
-            /* Отменяем скрытие интерфейса в полноэкранном режиме для мобильных устройств */
-            @media (max-width: 768px) {
-                .fullscreen-mode #model-selector,
-                .fullscreen-mode #controls,
-                .fullscreen-mode #display-mode,
-                .fullscreen-mode #help-icon {
-                    display: flex !important;
-                }
-                
-                .fullscreen-mode #help-icon {
-                    display: block !important;
-                }
-                
-                /* НОВЫЕ ПРАВИЛА: скрываем интерфейс в полноэкранном режиме, когда панель помощи открыта */
-                .fullscreen-mode.help-visible #model-selector,
-                .fullscreen-mode.help-visible #controls,
-                .fullscreen-mode.help-visible #display-mode {
-                    display: none !important;
-                }
-            }
-            
-            .fullscreen-mode #exit-fullscreen-btn {
-                opacity: 0.9;
-                display: flex !important;
-            }
-            
-            /* Еще более радикальное скрытие кнопки загрузки на мобильных устройствах */
-            @media (max-width: 768px) {
-                .model-upload-btn,
-                #upload-model-container,
-                /* Старые ID на случай, если script.js их использует */
-                #custom-model-upload {
-                    display: none !important;
-                    visibility: hidden !important;
-                    opacity: 0 !important;
-                    pointer-events: none !important;
-                }
-            }
-            
-            /* Модификатор для скрытия кнопки загрузки при открытом меню помощи */
-            .help-visible .model-upload-btn,
-            .help-visible #upload-model-container,
-            /* Старые ID на случай, если script.js их использует */
-            .help-visible #custom-model-upload {
-                display: none !important;
-                visibility: hidden !important;
-                opacity: 0 !important;
-                pointer-events: none !important;
-            }
-        }
         @media (hover:none) {
             button.control-btn:active, #share-model-btn:active, #file-upload-btn:active, .display-mode-btn:active {background-color:#4285f4 !important;transform:scale(0.95) !important;transition:transform 0.1s ease,background-color 0.1s ease;box-shadow:0 0 16px rgba(66,133,244,0.8) !important}
             button.control-btn.active, #share-model-btn.active, #file-upload-btn.active {background-color:#4285f4 !important;color:white !important;font-weight:bold;box-shadow:0 0 10px rgba(66,133,244,0.6);border:1px solid rgba(255,255,255,0.5)}
@@ -843,281 +693,228 @@
             top: -9999px !important;
         }
 
-        /* Стили для display-mode в десктопной версии - явно устанавливаем row */
-        #display-mode {
-            flex-direction: row !important;
-            justify-content: space-between;
-            align-items: flex-start;
-            min-width: 388px !important;
-            max-width: 430px !important;
-            padding: 15px !important;
-            gap: 7px !important;
-        }
-
-        /* Стили для заголовков секций */
-        .display-mode-left > div:first-child,
+        /* Панель освещения осталась одноколоночной (заголовок + три кнопки).
+           Прежние правила растягивали её в ряд из двух колонок под 400px шириной —
+           вторая колонка («Отображение») удалена вместе с режимами отображения,
+           размеры теперь приходят из базового правила #display-mode. */
         .display-mode-right > div:first-child {
-            padding: 5px 10px !important;
-            margin-bottom: 15px !important;
-            border-radius: 4px;
-            text-align: center !important;
-            width: 100% !important;
-            display: block !important;
-            position: relative !important;
-            background-color: transparent !important;
-            font-weight: 600 !important;
+            text-align: center;
+            font-weight: 600;
         }
 
-        /* Стили для контейнеров с кнопками */
-        #display-mode-buttons,
-        #hdr-buttons {
-            width: 100% !important;
-            display: flex !important;
-            flex-direction: column !important;
-            gap: 8px !important;
-        }
+        /* ── Мобильная раскладка ─────────────────────────────────────
+           Четыре непересекающиеся зоны: сверху слева выбор модели, сверху справа
+           круглые кнопки, снизу две панели одна над другой во всю ширину. Раньше
+           панели стояли по разным углам и в альбомной ориентации налезали друг на
+           друга, а кнопки в столбик во всю высоту закрывали саму модель. */
+        @media (max-width: 768px) {
+            #model-selector {
+                top: 8px;
+                left: 8px;
+                right: auto;
+                width: auto;
+                /* 116px — место под две круглые кнопки справа плюс зазор */
+                max-width: calc(100vw - 116px);
+                flex-direction: column;
+                align-items: stretch;
+                gap: 6px;
+                padding: 8px;
+                background-color: rgba(0,0,0,0.85);
+                border-radius: 10px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            }
+            #model-selector label { display: none; }
+            #project-label { font-size: 12px; max-width: none; }
+            #model-comment { font-size: 10px; max-width: none; }
+            #model-selector select {
+                width: 100%;
+                max-width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
+                font-size: 12px;
+                padding: 8px 26px 8px 10px;
+                background-position: right 4px top 50%;
+                border: 1px solid rgba(255,255,255,0.1);
+            }
+            #share-model-btn {
+                width: 100%;
+                min-width: 0;
+                margin-left: 0;
+                box-sizing: border-box;
+                padding: 8px 10px;
+                font-size: 11px;
+            }
 
-        /* Стили для секций левой и правой */
-        .display-mode-left,
-        .display-mode-right {
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            min-height: 160px !important;
-            flex: 1 !important;
-        }
+            #fullscreen-btn, #exit-fullscreen-btn {
+                top: 8px;
+                right: 8px;
+                width: 38px;
+                height: 38px;
+                min-width: 38px;
+                min-height: 38px;
+                z-index: 2000;
+            }
+            #fullscreen-btn { display: flex !important; }
+            #exit-fullscreen-btn { display: none !important; }
+            .fullscreen-mode #exit-fullscreen-btn { display: flex !important; opacity: 0.9; }
+            #help-icon {
+                top: 8px;
+                right: 54px;
+                width: 38px;
+                height: 38px;
+                line-height: 38px;
+                font-size: 16px;
+                z-index: 1500;
+            }
 
-        .display-mode-left {
-            padding-right: 0px !important;
-            border-right: none !important;
-        }
+            #controls {
+                flex-direction: row;
+                flex-wrap: nowrap;
+                align-items: center;
+                bottom: 8px;
+                left: 8px;
+                right: 8px;
+                gap: 6px;
+                padding: 8px;
+                background-color: rgba(0,0,0,0.85);
+                border-radius: 10px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            }
+            button.control-btn {
+                flex: 1 1 auto;
+                width: auto;
+                min-width: 0;
+                box-sizing: border-box;
+                padding: 9px 6px;
+                font-size: 11px;
+                letter-spacing: 0;
+                /* Строго одна строка: длинную подпись лучше подрезать, чем поднять
+                   всю панель на второй ряд и уехать под панель освещения */
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            #speed-control {
+                flex: 0 0 auto;
+                margin-left: 0;
+                padding: 6px 10px;
+                font-size: 11px;
+                white-space: nowrap;
+            }
 
-        .display-mode-right {
-            padding-left: 7px !important;
-        }
-
-        /* Стили для мобильных устройств */
-        @media (max-width:768px) {
+            /* Освещение — строкой прямо над панелью управления */
             #display-mode {
+                top: auto;
+                bottom: 58px;
+                left: 8px;
+                right: 8px;
                 flex-direction: row !important;
-                padding: 8px !important; /* Уменьшаем общие отступы подложки */
-                min-width: auto !important;
+                gap: 6px !important;
+                padding: 8px !important;
+                min-width: 0 !important;
                 max-width: none !important;
                 width: auto !important;
-                gap: 8px !important; /* Уменьшаем расстояние между блоками */
-                justify-content: space-between !important;
+                background-color: rgba(0,0,0,0.85);
+                border-radius: 10px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.4);
             }
-            
-            .display-mode-left {
-                border-right: none !important;
-                padding-right: 0 !important;
-                margin-right: 0 !important;
-                margin-bottom: 0 !important;
-                border-bottom: none !important;
-                padding-bottom: 0 !important;
-                min-height: auto !important;
-                order: 2 !important;
-                flex: 1 !important;
-                max-width: 55% !important;
-                padding-left: 0 !important; /* Убираем отступ слева */
-            }
-            
             .display-mode-right {
-                min-height: auto !important;
-                order: 1 !important;
-                border-right: none !important;
-                padding-right: 0 !important;
-                flex: 1 !important;
-                max-width: 42% !important;
-                padding-left: 0 !important; /* Убираем отступ слева */
+                flex-direction: row !important;
+                gap: 6px !important;
+                width: 100%;
             }
-            
-            /* Делаем кнопки более компактными для мобильных устройств */
-            #display-mode .display-mode-btn {
-                padding: 10px 5px !important;
-                font-size: 13px !important;
-                margin-bottom: 5px !important;
-                font-weight: 500 !important;
-                min-height: 38px !important; /* Фиксированная минимальная высота */
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-            }
-            
-            /* Специально увеличиваем ширину кнопок отображения (левая часть) */
-            .display-mode-left .display-mode-btn {
-                width: 100% !important;
-                padding-left: 10px !important;
-                padding-right: 10px !important;
-                min-width: 100px !important;
-                box-sizing: border-box !important;
-                white-space: normal !important;
-                height: auto !important;
-                line-height: 1.3 !important;
-                text-align: center !important;
-            }
-            
-            /* Корректируем размеры кнопок HDR на мобильных */
-            .display-mode-right .display-mode-btn {
-                padding-left: 6px !important;
-                padding-right: 6px !important;
-                width: 100% !important;
-                white-space: normal !important;
-                line-height: 1.3 !important;
-                text-align: center !important;
-            }
-            
-            /* Уменьшаем отступы между кнопками */
-            #display-mode-buttons,
+            /* Подпись «Освещение» на телефоне только съедает строку */
+            .display-mode-right > div:first-child { display: none !important; }
             #hdr-buttons {
-                gap: 5px !important;
-                width: 100% !important;
-                padding: 0 !important; /* Убираем отступы для контейнеров кнопок */
-                margin: 0 !important;
+                flex-direction: row !important;
+                gap: 6px !important;
+                width: 100%;
             }
-            
-            /* Убираем отступы заголовков */
-            .display-mode-left > div:first-child,
-            .display-mode-right > div:first-child {
-                margin-bottom: 5px !important; /* Уменьшаем отступ под заголовками */
-                padding: 0 !important;
+            .display-mode-btn {
+                flex: 1 1 auto;
+                min-width: 0;
+                box-sizing: border-box;
+                padding: 9px 6px !important;
+                font-size: 11px !important;
+                white-space: nowrap !important;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
-            
-            .display-mode-right {
-                min-height: auto !important;
-                order: 1 !important;
-                border-right: none !important;
-                padding-right: 0 !important;
-                flex: 1 !important;
-                max-width: 40% !important; /* Уменьшаем с 48% до 40% для баланса */
+
+            #help-panel {
+                top: 54px;
+                left: 8px;
+                right: 8px;
+                width: auto;
+                max-width: none;
+                /* border-box: иначе 28px внутренних отступов прибавлялись к max-height
+                   и панель вылезала за нижний край в альбомной ориентации */
+                box-sizing: border-box;
+                max-height: calc(100vh - 70px);
+                padding: 14px;
+                font-size: 12px;
+                z-index: 1500;
             }
-            
-            /* Делаем кнопки более широкими для мобильных устройств */
-            #display-mode .display-mode-btn {
-                padding: 10px 5px !important;
-                font-size: 13px !important;
-                margin-bottom: 5px !important;
-                font-weight: 500 !important;
+            #help-panel h3 { font-size: 17px; margin-bottom: 12px; }
+            #help-panel h4 { font-size: 14px; margin-bottom: 8px; }
+            .help-section { margin-bottom: 14px; }
+            .help-row { margin-bottom: 8px; font-size: 12px; }
+            #model-not-found {
+                font-size: 17px;
+                padding: 16px 20px;
+                width: calc(100vw - 48px);
+                box-sizing: border-box;
             }
-            
-            /* Специально увеличиваем ширину кнопок отображения (левая часть) */
-            .display-mode-left .display-mode-btn {
-                width: 100% !important;
-                padding-left: 10px !important;
-                padding-right: 10px !important;
-                min-width: 100px !important;
-                box-sizing: border-box !important;
-                white-space: normal !important; /* Разрешаем перенос слов на новую строку */
-                height: auto !important; /* Автоматическая высота для многострочного текста */
-                line-height: 1.3 !important; /* Улучшаем высоту строки для читаемости */
+            #model-not-found .mnf-hint { font-size: 12px; }
+
+            /* Загрузка своих моделей — только на большом экране */
+            .model-upload-btn,
+            #upload-model-container,
+            #custom-model-upload {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
             }
-            
-            /* Уменьшаем отступы между кнопками */
-            #display-mode-buttons,
-            #hdr-buttons {
-                gap: 5px !important;
-                width: 100% !important;
+            #file-upload-container { flex-direction: column; align-items: flex-start; }
+
+            /* В полноэкранном режиме интерфейс на телефоне остаётся: кнопки и так
+               мелкие, а без них не переключить ни вид, ни освещение. Убираем его
+               только когда поверх открыта помощь. */
+            .fullscreen-mode #model-selector,
+            .fullscreen-mode #controls,
+            .fullscreen-mode #display-mode { display: flex !important; }
+            .fullscreen-mode #help-icon { display: block !important; }
+            .fullscreen-mode.help-visible #model-selector,
+            .fullscreen-mode.help-visible #controls,
+            .fullscreen-mode.help-visible #display-mode { display: none !important; }
+            .help-visible .model-upload-btn,
+            .help-visible #upload-model-container,
+            .help-visible #custom-model-upload { display: none !important; }
+        }
+
+        /* Альбомная ориентация телефона: высоты мало, поэтому нижние панели встают
+           в один ряд — управление слева, освещение справа. */
+        @media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+            #controls {
+                right: auto;
+                width: auto;
             }
-            
-            /* Делаем кнопки более компактными для мобильных устройств */
-            #display-mode .display-mode-btn {
-                padding: 10px 5px !important;
-                font-size: 13px !important; /* Увеличиваем с 12px до 13px */
-                margin-bottom: 5px !important;
-                font-weight: 500 !important; /* Делаем текст чуть более жирным */
+            button.control-btn { flex: 0 0 auto; }
+            #speed-control { flex: 0 0 auto; }
+            #display-mode {
+                bottom: 8px;
+                left: auto;
+                right: 8px;
             }
-            
-            /* Уменьшаем толщину белой обводки для активных кнопок на мобильных устройствах */
-            #display-mode .display-mode-btn.active {
-                border: 1px solid white !important;  /* Уменьшаем с 2px до 1px */
-            }
-            
-            /* Специальные стили для hdr-btn в активном состоянии */
-            #display-mode .hdr-btn.active {
-                border: 1px solid white !important;  /* Уменьшаем с 2px до 1px */
-            }
-            
-            /* Уменьшаем отступы между кнопками */
-            #display-mode-buttons,
-            #hdr-buttons {
-                gap: 5px !important;
-                width: 100% !important;
-            }
-            
-            /* Корректируем размеры кнопок HDR на мобильных */
-            .display-mode-right .display-mode-btn {
-                padding-left: 6px !important;
-                padding-right: 6px !important;
-                width: 100% !important;
-                white-space: normal !important; /* Разрешаем перенос слов */ 
-                line-height: 1.3 !important;
-            }
-            
-            /* Стили для очень маленьких экранов */
-            @media (max-width:400px) {
-                .display-mode-left > div:first-child,
-                .display-mode-right > div:first-child {
-                    display: none !important;
-                }
-                
-                #display-mode .display-mode-btn {
-                    padding: 9px 4px !important;
-                    font-size: 12px !important;
-                    letter-spacing: -0.3px !important;
-                    font-weight: 500 !important;
-                    min-height: 34px !important; /* Фиксированная минимальная высота */
-                    display: flex !important;
-                    align-items: center !important;
-                    justify-content: center !important;
-                }
-                
-                /* Корректируем ширину кнопок для маленьких экранов */
-                .display-mode-left .display-mode-btn {
-                    min-width: 80px !important;
-                    padding-left: 5px !important;
-                    padding-right: 5px !important;
-                }
-                
-                /* Балансируем размеры секций для очень маленьких экранов */
-                .display-mode-left {
-                    max-width: 58% !important;
-                    padding: 0 !important;
-                }
-                
-                .display-mode-right {
-                    max-width: 40% !important;
-                    padding: 0 !important;
-                }
-                
-                #display-mode .display-mode-btn.active,
-                #display-mode .hdr-btn.active {
-                    border: 1px solid white !important;
-                }
-                
-                #display-mode {
-                    padding: 6px !important;
-                    gap: 4px !important;
-                }
-                
-                /* Максимально увеличиваем ширину кнопок за счет отступов */
-                #display-mode-buttons,
-                #hdr-buttons {
-                    padding: 0 !important;
-                    margin: 0 !important;
-                    width: 100% !important;
-                }
-            }
-            
-            /* Дополнительные стили для горизонтальной ориентации мобильных устройств */
-            @media (max-height: 500px) and (orientation: landscape) {
-                #display-mode {
-                    position: absolute !important;
-                    bottom: 85px !important;
-                    left: 10px !important;
-                    max-width: 95% !important;
-                    width: auto !important;
-                    opacity: 0.9 !important;
-                }
+            .display-mode-btn { flex: 0 0 auto; }
+            #model-selector { max-width: min(240px, calc(100vw - 320px)); }
+            #model-comment { display: none; }
+            #help-panel {
+                left: auto;
+                right: 8px;
+                width: min(420px, calc(100vw - 16px));
+                max-height: calc(100vh - 62px);
             }
         }
     </style>
@@ -1144,7 +941,7 @@
             <button id="top-view" class="control-btn">Вид сверху</button>
             <button id="toggle-control" class="control-btn">WASD управление</button>
             <div id="speed-control" style="display: none;">
-                <span>Скорость: <span id="speed-indicator">5.0</span></span>
+                <span>Скорость: <span id="speed-indicator">1.0</span></span>
             </div>
         </div>
         
@@ -1173,79 +970,87 @@
         <div id="help-icon">?</div>
         <div id="help-panel">
             <h3>Управление</h3>
-            
+
             <div class="help-section">
-                <h4>Стандартный режим</h4>
+                <h4>Мышь</h4>
                 <div class="help-row">
                     <span>Перемещение:</span>
-                    <span>LMB</span>
+                    <span>ЛКМ</span>
                 </div>
                 <div class="help-row">
                     <span>Вращение:</span>
-                    <span>RMB</span>
+                    <span>ПКМ</span>
                 </div>
                 <div class="help-row">
-                    <span>Масштабирование:</span>
-                    <span>MB</span>
+                    <span>Масштаб:</span>
+                    <span>Колесо / СКМ</span>
                 </div>
                 <div class="help-row">
                     <span>Подлететь к точке:</span>
-                    <span>2×LMB</span>
+                    <span>2×ЛКМ</span>
                 </div>
             </div>
-            
+
             <div class="help-section">
-                <h4>Режим WASD</h4>
+                <h4>Сенсорный экран</h4>
                 <div class="help-row">
                     <span>Перемещение:</span>
-                    <span>W A S D</span>
-                </div>
-                <div class="help-row">
-                    <span>Подъем/спуск:</span>
-                    <span>Q E</span>
+                    <span>1 палец</span>
                 </div>
                 <div class="help-row">
                     <span>Вращение:</span>
-                    <span>LMB</span>
+                    <span>2 пальца</span>
+                </div>
+                <div class="help-row">
+                    <span>Масштаб:</span>
+                    <span>Щипок</span>
+                </div>
+            </div>
+
+            <div class="help-section">
+                <h4>Режим WASD</h4>
+                <div class="help-row">
+                    <span>Вперёд / назад / вбок:</span>
+                    <span>W A S D</span>
+                </div>
+                <div class="help-row">
+                    <span>Вверх / вниз:</span>
+                    <span>Q E</span>
+                </div>
+                <div class="help-row">
+                    <span>Осмотр:</span>
+                    <span>ЛКМ</span>
                 </div>
                 <div class="help-row">
                     <span>Скорость:</span>
-                    <span>MB</span>
+                    <span>Колесо</span>
                 </div>
                 <div class="help-row">
                     <span>Ускорение:</span>
                     <span>Shift</span>
                 </div>
-                <div class="help-row">
-                    <span>Свободный полёт:</span>
-                    <span>Shift+Q/E</span>
-                </div>
             </div>
-            
-            
+
             <div class="help-section">
                 <h4>Горячие клавиши</h4>
                 <div class="help-row">
-                    <span>Освещение:</span>
-                    <span>4 5 6</span>
-                </div>
-                <div class="help-row">
                     <span>Сброс камеры:</span>
                     <span>R</span>
+                </div>
+                <div class="help-row">
+                    <span>Режим WASD:</span>
+                    <span>G</span>
                 </div>
                 <div class="help-row">
                     <span>Помощь:</span>
                     <span>H</span>
                 </div>
                 <div class="help-row">
-                    <span>WASD режим:</span>
-                    <span>G</span>
-                </div>
-                <div class="help-row">
                     <span>Полный экран:</span>
-                    <span>F ESC</span>
+                    <span>F / ESC</span>
                 </div>
             </div>
+
         </div>
     </div>
 

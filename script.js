@@ -1016,7 +1016,11 @@ let edgesMaterial = null;
 let controlMode = 'orbit';
 
 const keyState = {};
-let moveSpeed = 5.0;
+let moveSpeed = 1.0;
+// Боковой шаг медленнее прямого: W/S идут по полному вектору взгляда, и при взгляде
+// вниз их горизонтальная составляющая короче — без этой поправки стрейф обгоняет ход
+// вперёд. Числом (а не нормировкой forward) — чтобы полёт вниз по взгляду сохранился.
+const STRAFE_SPEED_FACTOR = 0.7;
 const MIN_MOVE_SPEED = 0.1;
 const MAX_MOVE_SPEED = 10.0;
 const MOVE_SPEED_STEP = 0.5;
@@ -1547,10 +1551,10 @@ function updateWASDControls() {
     
     // Боковое движение A/D остается в горизонтальной плоскости для удобства управления
     if (keyState['a'] || keyState['ф']) {
-        targetMoveVector.sub(right);
+        targetMoveVector.addScaledVector(right, -STRAFE_SPEED_FACTOR);
     }
     if (keyState['d'] || keyState['в']) {
-        targetMoveVector.add(right);
+        targetMoveVector.addScaledVector(right, STRAFE_SPEED_FACTOR);
     }
     
     // Вертикальное движение при нажатии Q и E
@@ -1615,66 +1619,13 @@ function updateWASDControls() {
         currentVelocity.y = targetMoveVector.y;
     }
     
-    // ===== Применение движения с улучшенной обработкой коллизий =====
-    // Если скорость достаточна для движения
+    // ===== Применение движения =====
+    // Коллизии убраны: checkCollisions() обходила всю сцену и делала рейкасты по каждому
+    // мешу — и так до трёх раз за кадр, из-за чего WASD заметно тормозил на больших
+    // моделях. Пролетать сквозь стены здесь допустимо, это осмотрщик, а не игра.
     if (currentVelocity.lengthSq() > 0.0001) {
-        // Сохраняем текущую позицию для проверки коллизий и возможного отката
-        const originalPosition = camera.position.clone();
-        
-        // Создаем временную позицию после применения скорости
-        const newPosition = originalPosition.clone().add(currentVelocity);
-        
-        // УДАЛЯЕМ ограничение минимальной высоты
-        // Теперь камера может свободно перемещаться вниз без ограничений
-        
-        // Улучшенная пошаговая проверка коллизий для предотвращения "прохождения сквозь стены"
-        // Проверяем каждую ось отдельно, что позволяет лучше обрабатывать углы и узкие проходы
-        
-        // 1. Сначала проверяем вертикальное движение (ось Y)
-        let tempPosition = originalPosition.clone();
-        tempPosition.y = newPosition.y;
-        tempPosition = checkCollisions(originalPosition, tempPosition);
-        
-        // 2. Затем проверяем горизонтальное движение (оси X и Z) из позиции с уже примененной вертикальной коррекцией
-        // Проверяем X и Z по отдельности для лучшей обработки углов
-        let finalPosition = tempPosition.clone();
-        
-        // 2.1 Проверка оси X
-        let xPosition = tempPosition.clone();
-        xPosition.x = newPosition.x;
-        xPosition = checkCollisions(tempPosition, xPosition);
-        
-        // 2.2 Проверка оси Z из позиции с уже примененной X-коррекцией
-        finalPosition = xPosition.clone();
-        finalPosition.z = newPosition.z;
-        finalPosition = checkCollisions(xPosition, finalPosition);
-        
-        // Если после всех проверок позиция отличается от исходной
-        if (!finalPosition.equals(originalPosition)) {
-            // Рассчитываем фактический вектор движения после коллизий
-            const actualMovement = new THREE.Vector3().subVectors(finalPosition, originalPosition);
-            
-            // Применяем перемещение к камере
-            camera.position.copy(finalPosition);
-            
-            // Обновляем цель для контроллера
-            controls.target.copy(controls.target.clone().add(actualMovement));
-            
-            // Добавляем более интеллектуальную корректировку скорости на основе фактического движения
-            // Для каждой оси проверяем, насколько фактическое движение меньше ожидаемого
-            const movementFractionX = Math.abs(currentVelocity.x) < 0.001 ? 1 : 
-                                     Math.abs(actualMovement.x) / Math.abs(currentVelocity.x);
-            const movementFractionY = Math.abs(currentVelocity.y) < 0.001 ? 1 : 
-                                     Math.abs(actualMovement.y) / Math.abs(currentVelocity.y);
-            const movementFractionZ = Math.abs(currentVelocity.z) < 0.001 ? 1 : 
-                                     Math.abs(actualMovement.z) / Math.abs(currentVelocity.z);
-            
-            // Если движение по оси было ограничено коллизией более чем на 20%,
-            // значительно уменьшаем скорость по этой оси
-            if (movementFractionX < 0.8) currentVelocity.x *= 0.1;
-            if (movementFractionY < 0.8) currentVelocity.y *= 0.1;
-            if (movementFractionZ < 0.8) currentVelocity.z *= 0.1;
-        }
+        camera.position.add(currentVelocity);
+        controls.target.add(currentVelocity);
     }
 }
 
@@ -1778,7 +1729,9 @@ async function init() {
     
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.dampingFactor = 0.1;
+    // 0.1 давал заметный выбег после жеста — камера «доезжала» уже после того, как
+    // палец или кнопку отпустили. 0.25 оставляет сглаживание, но останавливает сразу.
+    controls.dampingFactor = 0.25;
     controls.screenSpacePanning = true;
     // Модель нормализована в куб 200 единиц (см. loadModel), поэтому границы заданы
     // от этого габарита: 0.2 — вплотную к детали, 1200 — вся сцена с запасом.
@@ -1790,8 +1743,11 @@ async function init() {
     controls.maxPolarAngle = Math.PI;
     controls.enableZoom = true;
     controls.zoomSpeed = 0.9; // Шаг колеса: 0.55 был слишком мелким
-    controls.rotateSpeed = 1.0;
-    controls.panSpeed = 0.5;
+    // Вращение (два пальца на тач-экране) сделано спокойнее, перемещение — заметно
+    // быстрее: панорамировать приходится постоянно, и 0.5 требовало возить пальцем
+    // через весь экран. Мышиное вращение живёт отдельно, см. ROTATE_SPEED.
+    controls.rotateSpeed = 0.6;
+    controls.panSpeed = 1.4;
     controls.autoRotate = true;
     controls.autoRotateSpeed = 1.0;
     
@@ -1947,14 +1903,10 @@ function setupHDRInterface() {
     // Полностью очищаем контейнер перед добавлением новых элементов
     displayModeContainer.innerHTML = '';
     
-    // Устанавливаем явные стили для контейнера
+    // Ширину и отступы задаёт CSS: инлайновые 480-550px остались от двух колонок,
+    // вторая («Отображение») удалена вместе с режимами отображения, и панель из трёх
+    // кнопок растягивалась на пустое место, а на телефоне её было не ужать.
     displayModeContainer.style.display = 'flex';
-    displayModeContainer.style.flexDirection = 'row';
-    displayModeContainer.style.width = 'auto';
-    displayModeContainer.style.minWidth = '480px';
-    displayModeContainer.style.maxWidth = '550px';
-    displayModeContainer.style.gap = '20px';
-    displayModeContainer.style.padding = '15px';
     
     // Создаем правую часть для HDR кнопок
     const displayModeRight = document.createElement('div');
@@ -2632,8 +2584,6 @@ function animate() {
         }
     }
 
-    updateCursorRotateGlide();
-
     if (controls) controls.update();
 
     updateWASDControls();
@@ -3065,19 +3015,16 @@ function updateOrbitPivot(event) {
 // После поворота цель возвращается на ось взгляда, чтобы OrbitControls (пан, зум)
 // продолжал работать и ничего не разворачивал.
 
-const ROTATE_SPEED = 0.005;   // радиан на пиксель
-const ROTATE_GLIDE_DECAY = 0.88;
-const ROTATE_GLIDE_MIN = 0.0002;
+// Радиан на пиксель. 0.005 крутило слишком резко — за полэкрана модель успевала
+// провернуться и человек терял, где он.
+const ROTATE_SPEED = 0.0032;
 
 const cursorRotate = {
     active: false,
     pointerId: null,
     pivot: new THREE.Vector3(),
     lastX: 0,
-    lastY: 0,
-    velocityX: 0,
-    velocityY: 0,
-    gliding: false
+    lastY: 0
 };
 
 // Поворот камеры вокруг pivot: рыскание вокруг мировой Y, тангаж вокруг оси «вправо»
@@ -3119,12 +3066,9 @@ function beginCursorRotate(event) {
     const hit = raycastModel(event);
     cursorRotate.pivot.copy(hit ? hit.point : controls.target);
     cursorRotate.active = true;
-    cursorRotate.gliding = false;
     cursorRotate.pointerId = event.pointerId;
     cursorRotate.lastX = event.clientX;
     cursorRotate.lastY = event.clientY;
-    cursorRotate.velocityX = 0;
-    cursorRotate.velocityY = 0;
     userMovedCamera = true;
     controls.autoRotate = false;
 
@@ -3141,45 +3085,17 @@ function moveCursorRotate(event) {
     cursorRotate.lastX = event.clientX;
     cursorRotate.lastY = event.clientY;
 
-    cursorRotate.velocityX = -dx * ROTATE_SPEED;
-    cursorRotate.velocityY = -dy * ROTATE_SPEED;
-    orbitAroundPivot(cursorRotate.velocityX, cursorRotate.velocityY);
+    orbitAroundPivot(-dx * ROTATE_SPEED, -dy * ROTATE_SPEED);
 }
 
+// Выбег после отпускания убран: камера продолжала «доезжать» уже после жеста,
+// и попасть в нужный ракурс с первого раза не получалось.
 function endCursorRotate(event) {
     if (!cursorRotate.active) return;
     if (event && event.pointerId !== cursorRotate.pointerId) return;
 
     cursorRotate.active = false;
     cursorRotate.pointerId = null;
-
-    // Небольшой выбег после отпускания — чтобы вращение не обрывалось резко,
-    // как оно вело себя с затуханием OrbitControls.
-    if (Math.abs(cursorRotate.velocityX) > ROTATE_GLIDE_MIN ||
-        Math.abs(cursorRotate.velocityY) > ROTATE_GLIDE_MIN) {
-        cursorRotate.gliding = true;
-    }
-}
-
-// Вызывается из animate(): доигрывает инерцию вращения
-function updateCursorRotateGlide() {
-    if (!cursorRotate.gliding) return;
-
-    if (controlMode !== 'orbit' || isTopView) {
-        cursorRotate.gliding = false;
-        return;
-    }
-
-    cursorRotate.velocityX *= ROTATE_GLIDE_DECAY;
-    cursorRotate.velocityY *= ROTATE_GLIDE_DECAY;
-
-    if (Math.abs(cursorRotate.velocityX) < ROTATE_GLIDE_MIN &&
-        Math.abs(cursorRotate.velocityY) < ROTATE_GLIDE_MIN) {
-        cursorRotate.gliding = false;
-        return;
-    }
-
-    orbitAroundPivot(cursorRotate.velocityX, cursorRotate.velocityY);
 }
 
 // Двойной клик — подлёт к точке: камера приближается к тому, по чему щёлкнули,
@@ -3265,45 +3181,22 @@ function ensureOrthoCamera() {
     return orthoCamera;
 }
 
-// Переход в вид сверху и обратно: сначала перспективная камера плавно взлетает над
-// моделью, и только в конце подменяется ортогональной — переключение «в лоб» читается
-// как телепорт и теряется ориентация. Возврат идёт тем же путём назад.
-let topViewTransition = false;
-let savedPerspectiveView = null;
+// Переход в вид сверху и обратно — мгновенный. Двухфазный перелёт (перспективная
+// камера взлетала над моделью и только потом подменялась ортогональной) читался как
+// подтормаживание и на полпути показывал ракурс, которого человек не просил.
+// Вместо позиции запоминаем смещение камеры относительно цели: если в плане отъехали
+// в другой угол площадки, возврат отдаёт тот же ракурс, но уже над новым местом.
+let savedPerspectiveOffset = null;
 
-function topViewPosition() {
-    const height = Math.max(modelViewRadius() * 4, 500);
-    return new THREE.Vector3(controls.target.x, controls.target.y + height, controls.target.z);
+function topViewHeight() {
+    return Math.max(modelViewRadius() * 4, 500);
 }
 
-function flyPerspectiveTo(endPosition, onDone) {
-    const startPosition = perspectiveCamera.position.clone();
-    const duration = 550;
-    const startTime = performance.now();
-
-    function step(time) {
-        const progress = Math.min((time - startTime) / duration, 1);
-        const eased = 1 - Math.pow(1 - progress, 3);
-
-        perspectiveCamera.position.lerpVectors(startPosition, endPosition, eased);
-        controls.update();
-
-        if (progress < 1) {
-            requestAnimationFrame(step);
-        } else if (onDone) {
-            onDone();
-        }
-    }
-    requestAnimationFrame(step);
-}
-
-// Мгновенный выход без перелёта: нужен там, где сразу следом идёт своя анимация
-// (сброс камеры) или смена режима управления — иначе две анимации тянут камеру врозь.
+// Мгновенный выход, оставляющий камеру там, где она сейчас на экране: нужен там, где
+// сразу следом идёт своя анимация (сброс камеры) или смена режима управления.
 function exitTopViewImmediate() {
     if (!isTopView || !controls) return;
 
-    // Позицию оставляем ту, что на экране: следом всё равно идёт своя анимация,
-    // и возврат в сохранённый вид дал бы лишний скачок.
     if (orthoCamera) perspectiveCamera.position.copy(orthoCamera.position);
 
     camera = perspectiveCamera;
@@ -3312,62 +3205,48 @@ function exitTopViewImmediate() {
     controls.update();
 
     isTopView = false;
-    topViewTransition = false;
     updateTopViewButton();
 }
 
 function setTopView(enabled) {
-    if (!controls || enabled === isTopView || topViewTransition) return;
+    if (!controls || enabled === isTopView) return;
 
     // В WASD ортокамера смысла не имеет — возвращаемся в орбитальный режим
     if (enabled && controlMode === 'wasd') toggleControlMode();
 
     cameraFlightCancelled = true;
-    cursorRotate.gliding = false;
     userMovedCamera = true;
-    topViewTransition = true;
 
     if (enabled) {
-        savedPerspectiveView = {
-            position: perspectiveCamera.position.clone(),
-            target: controls.target.clone()
-        };
+        savedPerspectiveOffset = perspectiveCamera.position.clone().sub(controls.target);
 
-        // Взлетаем перспективной камерой, затем подменяем её ортогональной
-        flyPerspectiveTo(topViewPosition(), () => {
-            const ortho = ensureOrthoCamera();
-            ortho.position.copy(perspectiveCamera.position);
-            ortho.lookAt(controls.target);
+        const ortho = ensureOrthoCamera();
+        ortho.position.set(
+            controls.target.x,
+            controls.target.y + topViewHeight(),
+            controls.target.z
+        );
+        ortho.lookAt(controls.target);
 
-            camera = ortho;
-            controls.object = camera;
-            // Сверху вращать нечего: это план площадки, наклон его только ломает
-            controls.enableRotate = false;
-            controls.update();
+        camera = ortho;
+        controls.object = camera;
+        // Сверху вращать нечего: это план площадки, наклон его только ломает
+        controls.enableRotate = false;
+    } else {
+        if (savedPerspectiveOffset) {
+            perspectiveCamera.position.copy(controls.target).add(savedPerspectiveOffset);
+        } else if (orthoCamera) {
+            perspectiveCamera.position.copy(orthoCamera.position);
+        }
 
-            isTopView = true;
-            topViewTransition = false;
-            updateTopViewButton();
-        });
-        return;
+        camera = perspectiveCamera;
+        controls.object = camera;
+        controls.enableRotate = true;
     }
 
-    // Возврат: сперва отдаём управление перспективной камере в той же точке
-    perspectiveCamera.position.copy(orthoCamera ? orthoCamera.position : perspectiveCamera.position);
-    camera = perspectiveCamera;
-    controls.object = camera;
-    controls.enableRotate = true;
     controls.update();
-
-    isTopView = false;
+    isTopView = enabled;
     updateTopViewButton();
-
-    const back = savedPerspectiveView ? savedPerspectiveView.position : initialCameraPosition;
-    if (savedPerspectiveView) controls.target.copy(savedPerspectiveView.target);
-
-    flyPerspectiveTo(back.clone(), () => {
-        topViewTransition = false;
-    });
 }
 
 function toggleTopView() {
@@ -5613,139 +5492,9 @@ function showAnimationsList() {
     }
 }
 
-// Добавим глобальную переменную для хранения коллайдеров сцены
-let sceneColliders = [];
-
-// Улучшенная функция проверки коллизий с более надежным алгоритмом
-function checkCollisions(position, newPosition) {
-    // === ОПТИМИЗИРОВАННАЯ СИСТЕМА КОЛЛИЗИЙ ===
-    const CAMERA_RADIUS = 1.0;      // Уменьшенный радиус коллизии камеры
-    const COLLISION_MARGIN = 0.5;   // Небольшой отступ от стен
-    
-    // === Проверка отсутствия движения - для оптимизации ===
-    const moveDirection = new THREE.Vector3().subVectors(newPosition, position);
-    const moveDistance = moveDirection.length();
-    
-    // Если перемещение слишком маленькое, просто разрешаем его (оптимизация)
-    if (moveDistance < 0.001) return newPosition;
-    
-    // Нормализуем вектор движения
-    moveDirection.normalize();
-    
-    // === ОПТИМИЗИРОВАННАЯ ПРОВЕРКА КОЛЛИЗИЙ ===
-    // Ограничиваемся только 2 ключевыми направлениями для повышения производительности
-    
-    // 1. Проверка в направлении движения
-    const raycastDistance = moveDistance + CAMERA_RADIUS;
-    const mainRaycaster = new THREE.Raycaster(position, moveDirection, 0, raycastDistance);
-    
-    // 2. Проверка в направлении взгляда (только если смотрим вперед)
-    const lookDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-    const lookRaycaster = new THREE.Raycaster(position, lookDirection, 0, CAMERA_RADIUS * 2);
-    
-    // Массивы для хранения пересечений
-    const moveIntersects = [];
-    const lookIntersects = [];
-    
-    // Кэширование результатов при обходе сцены
-    const sceneObjects = [];
-    let sceneTraversed = false;
-    
-    // Проходим сцену только один раз и собираем объекты для проверки коллизий
-    function getSceneObjects() {
-        if (!sceneTraversed && scene) {
-            scene.traverse(function(object) {
-                // Пропускаем объекты, с которыми не должно быть коллизий
-                if (object === camera) return;
-                if (!object.visible) return;
-                if (object.userData && object.userData.noCollision) return;
-                
-                // Проверяем только меши с геометрией
-                if (object.isMesh && object.geometry) {
-                    // Пропускаем прозрачные объекты
-                    let isTransparent = false;
-                    if (object.material) {
-                        if (Array.isArray(object.material)) {
-                            isTransparent = object.material.every(mat => 
-                                mat.transparent && mat.opacity < 0.3);
-                        } else {
-                            isTransparent = object.material.transparent && 
-                                object.material.opacity < 0.3;
-                        }
-                    }
-                    if (!isTransparent) {
-                        sceneObjects.push(object);
-                    }
-                }
-            });
-            sceneTraversed = true;
-        }
-        return sceneObjects;
-    }
-    
-    // Выполняем проверки коллизий
-    const objects = getSceneObjects();
-    
-    // Проверка в направлении движения
-    moveIntersects.push(...mainRaycaster.intersectObjects(objects, false));
-    
-    // Проверка в направлении взгляда
-    // Вычисляем угол между направлением движения и взглядом
-    const lookMoveDot = lookDirection.dot(moveDirection);
-    
-    // Только если двигаемся примерно в направлении взгляда (в пределах 45°)
-    // или если взгляд направлен в сторону движения
-    if (lookMoveDot > 0.7 || lookDirection.dot(moveDirection) > 0) {
-        lookIntersects.push(...lookRaycaster.intersectObjects(objects, false));
-    }
-    
-    // === ОБРАБОТКА РЕЗУЛЬТАТОВ КОЛЛИЗИИ ===
-    
-    // 1. Обработка коллизий в направлении движения
-    if (moveIntersects.length > 0) {
-        const collision = moveIntersects[0]; // Ближайшее пересечение
-        
-        // Если пересечение ближе, чем конечная позиция
-        if (collision.distance < moveDistance + CAMERA_RADIUS) {
-            // Вычисляем безопасное расстояние
-            const safeDistance = Math.max(0, collision.distance - COLLISION_MARGIN);
-            
-            if (safeDistance > 0) {
-                // Перемещаемся до безопасной позиции
-                const safePosition = position.clone().add(
-                    moveDirection.clone().multiplyScalar(safeDistance)
-                );
-                return safePosition;
-            } else {
-                // Слишком близко - не двигаемся
-                return position.clone();
-            }
-        }
-    }
-    
-    // 2. Обработка коллизий в направлении взгляда
-    if (lookIntersects.length > 0 && lookMoveDot > 0.7) {
-        const collision = lookIntersects[0]; // Ближайшее пересечение
-        
-        // Если объект находится очень близко к камере в направлении взгляда
-        if (collision.distance < CAMERA_RADIUS * 1.5) {
-            // Ограничиваем движение пропорционально близости к объекту
-            const proximityFactor = collision.distance / (CAMERA_RADIUS * 2);
-            const limitedDistance = moveDistance * proximityFactor;
-            
-            // Только если движение в сторону объекта и объект близко
-            if (limitedDistance < moveDistance && lookMoveDot > 0) {
-                const limitedPosition = position.clone().add(
-                    moveDirection.clone().multiplyScalar(limitedDistance)
-                );
-                return limitedPosition;
-            }
-        }
-    }
-    
-    // Если коллизий нет или они не требуют корректировки - разрешаем движение
-    return newPosition;
-}
+// Система коллизий (sceneColliders / checkCollisions) удалена: в WASD она обходила
+// сцену и рейкастила по всем мешам трижды за кадр — главный источник просадок в этом
+// режиме. Пролёт сквозь геометрию признан приемлемым.
 
 // Функция для обработки URL и загрузки модели по имени (УСТАРЕВШАЯ - НЕ ИСПОЛЬЗУЕТСЯ)
 async function handleUrlModelLoading() {
