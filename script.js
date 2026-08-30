@@ -1665,6 +1665,10 @@ const DEFAULT_SETTINGS = {
     envRotation: 0,      // градусы, поворот HDR вокруг вертикали
     sunAzimuth: 45,      // градусы
     sunElevation: 40,    // градусы над горизонтом
+    // Дефолт прежний, чтобы картинка «из коробки» не поехала. Но тени бросает
+    // именно этот источник, а окружение (PMREM) их не даёт вовсе — при 0.25
+    // тень почти не читается, и под тени солнце надо усиливать.
+    sunIntensity: 0.25,
     doubleSided: false,  // выкл — сторона как в файле
     maskedTransparency: false, // флаг отката к прежнему alphaTest 0.5
     background: 'color', // 'color' | 'gradient' | 'hdri'
@@ -1675,7 +1679,23 @@ const DEFAULT_SETTINGS = {
     bgIntensity: 1.0,
     fog: false,
     fogColor: '#8a929c',
-    fogDensity: 1.0   // множитель: больше — туман ближе и плотнее
+    fogDensity: 1.0,  // множитель: больше — туман ближе и плотнее
+
+    // Этап B. Всё дорогое выключено по умолчанию: включённым эффект стоит кадров,
+    // выключенным — ровно ничего, рендер идёт мимо композера.
+    shadows: false,
+    shadowQuality: 2048,
+    ao: false,
+    aoRadius: 4,          // в единицах сцены; модель нормализована в куб 200
+    aoFalloff: 2,         // distanceExponent: насколько быстро затенение спадает
+    outline: false,
+    outlineThickness: 1,
+    outlineStrength: 3,
+    // Светлый: фон по умолчанию тёмный, и тёмный силуэт на нём попросту не виден
+    outlineColor: '#e8e4dc',
+    edges: false,
+    edgesOpacity: 0.35,
+    edgesColor: '#101010'
 };
 
 let settings = Object.assign({}, DEFAULT_SETTINGS);
@@ -1720,6 +1740,9 @@ function applyAllSettings() {
     applyMaterialSettings();
     applyBackground();
     applyFog();
+    applyShadows();
+    applyEdges();
+    applyPostprocessing();
 }
 
 function applyExposure() {
@@ -1732,6 +1755,8 @@ function applyExposure() {
 // это и есть быстрый «посмотреть по-другому» без пересборки PMREM.
 function applySun() {
     if (!sunLight || !fillLight) return;
+
+    sunLight.intensity = settings.sunIntensity;
     const az = THREE.MathUtils.degToRad(settings.sunAzimuth);
     const el = THREE.MathUtils.degToRad(settings.sunElevation);
     const r = 500;
@@ -1744,6 +1769,10 @@ function applySun() {
     // Заполняющий — с противоположной стороны и пониже, чтобы теневая сторона
     // не проваливалась в чёрное.
     fillLight.position.set(-sunLight.position.x, r * 0.3, -sunLight.position.z);
+
+    // Теневая карта не обновляется сама (см. applyShadows): сцена статична,
+    // и пересчитывать её каждый кадр незачем — но солнце сдвинулось.
+    if (sunLight.shadow) sunLight.shadow.needsUpdate = true;
 }
 
 function getHdrUrl(path) {
@@ -1774,7 +1803,7 @@ async function init() {
     
     // Ключевой и заполняющий — единственные источники, которыми управляет панель
     // настроек (азимут и высота солнца). Позиции ставит applySun().
-    sunLight = new THREE.DirectionalLight(0xffffff, 0.25); // Уменьшено с 0.5
+    sunLight = new THREE.DirectionalLight(0xffffff, settings.sunIntensity);
     scene.add(sunLight);
 
     fillLight = new THREE.DirectionalLight(0xffffff, 0.15); // Уменьшено с 0.3
@@ -1785,7 +1814,10 @@ async function init() {
     const width = container.clientWidth;
     const height = container.clientHeight;
     
-    camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
+    // 0.1..2000 давало 20000:1 по глубине, и экранное затенение (этап B)
+    // на такой шкале превращалось в крупу. Дальняя плоскость всё равно была
+    // с запасом: орбита ограничена maxDistance = 1200.
+    camera = new THREE.PerspectiveCamera(45, width / height, 0.5, 1600);
     perspectiveCamera = camera;
     
     setupInitialCameraState();
@@ -2081,6 +2113,225 @@ function applyFog() {
     }
 }
 
+// ─── B0. Тени от солнца ───────────────────────────────────────────────────────
+// Одно направленное с castShadow, теневая камера по габариту модели. Сцена
+// статична, поэтому shadow.autoUpdate = false: карта считается не каждый кадр,
+// а только когда двинулось солнце, сменилась модель или настройка. Раз цена
+// разовая, карту берём большую и фильтр мягкий — та самая мягкость, ради
+// которой обычно идут в запечку.
+
+function applyShadows() {
+    if (!renderer || !sunLight) return;
+
+    const wanted = !!settings.shadows;
+
+    if (renderer.shadowMap.enabled !== wanted) {
+        renderer.shadowMap.enabled = wanted;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        // Появление и исчезновение теней меняет шейдер материала
+        eachModelMaterial((material) => { material.needsUpdate = true; });
+    }
+
+    sunLight.castShadow = wanted;
+    if (!wanted) return;
+
+    const size = settings.shadowQuality;
+    if (sunLight.shadow.mapSize.width !== size) {
+        sunLight.shadow.mapSize.set(size, size);
+        // Карта уже выделена под старый размер — освобождаем, пересоздастся сама
+        if (sunLight.shadow.map) {
+            sunLight.shadow.map.dispose();
+            sunLight.shadow.map = null;
+        }
+    }
+
+    const radius = modelViewRadius();
+    const shadowCamera = sunLight.shadow.camera;
+    shadowCamera.left = -radius * 1.2;
+    shadowCamera.right = radius * 1.2;
+    shadowCamera.top = radius * 1.2;
+    shadowCamera.bottom = -radius * 1.2;
+    shadowCamera.near = 1;
+    shadowCamera.far = radius * 6;
+    shadowCamera.updateProjectionMatrix();
+
+    // Смещения тоже от габарита: модель нормализуется в куб 200, но радиус
+    // ограничивающей сферы у разных моделей всё же разный.
+    sunLight.shadow.bias = -0.0005;
+    sunLight.shadow.normalBias = radius * 0.004;
+
+    sunLight.shadow.autoUpdate = false;
+    sunLight.shadow.needsUpdate = true;
+}
+
+// ─── B2. Постпроцессинг: AO и силуэты ─────────────────────────────────────────
+// Модули подтягиваются динамическим import() при первом включении эффекта: один
+// SMAAPass весит под 50 КБ (в нём base64-текстуры), и платить за него на каждой
+// загрузке ради выключенного по умолчанию эффекта незачем. Точки входа надо
+// держать в deploy/deploy-frontend.mjs → ADDON_ENTRIES, иначе локально соберётся,
+// а на стенде будет 404 в рантайме.
+
+let composer = null;
+let composerParts = null;   // { render, sao, outline, smaa, output }
+let composerLoading = false;
+let composerOrtho = false;
+
+function postprocessingWanted() {
+    return !!(settings.ao || settings.outline);
+}
+
+function disposeComposer() {
+    if (!composer) return;
+
+    if (composerParts) {
+        for (const pass of Object.values(composerParts)) {
+            if (pass && typeof pass.dispose === 'function') pass.dispose();
+        }
+    }
+    composer.renderTarget1.dispose();
+    composer.renderTarget2.dispose();
+
+    composer = null;
+    composerParts = null;
+}
+
+async function ensureComposer() {
+    if (composer || composerLoading || !renderer || !scene || !camera) return;
+    composerLoading = true;
+
+    try {
+        const [
+            { EffectComposer }, { RenderPass }, { HBAOPass },
+            { OutlinePass }, { SMAAPass }, { OutputPass }
+        ] = await Promise.all([
+            import('three/addons/postprocessing/EffectComposer.js'),
+            import('three/addons/postprocessing/RenderPass.js'),
+            import('three/addons/postprocessing/HBAOPass.js'),
+            import('three/addons/postprocessing/OutlinePass.js'),
+            import('three/addons/postprocessing/SMAAPass.js'),
+            import('three/addons/postprocessing/OutputPass.js')
+        ]);
+
+        const width = container.clientWidth || 1;
+        const height = container.clientHeight || 1;
+
+        composer = new EffectComposer(renderer);
+        composer.setPixelRatio(cappedPixelRatio());
+
+        const parts = {
+            render: new RenderPass(scene, camera),
+            // HBAO, как и предлагал план. SAOPass пробовали первым (у него есть
+            // ручка интенсивности, которой у HBAO нет) — картинка вышла
+            // непригодной: сплошная крупная крупа по всей сцене на любых
+            // радиусах. У HBAO внутри есть шумоподавление, поэтому он держится.
+            ao: new HBAOPass(scene, camera, width, height),
+            outline: new OutlinePass(new THREE.Vector2(width, height), scene, camera),
+            // Аппаратное сглаживание (antialias: true) в offscreen-таргете не
+            // работает, кромки чистит SMAA. OutputPass берёт на себя тонмаппинг
+            // и перевод в sRGB — иначе они применились бы дважды.
+            smaa: new SMAAPass(width, height),
+            output: new OutputPass()
+        };
+
+        composer.addPass(parts.render);
+        composer.addPass(parts.ao);
+        composer.addPass(parts.outline);
+        composer.addPass(parts.smaa);
+        composer.addPass(parts.output);
+
+        composer.setSize(width, height);
+
+        composerParts = parts;
+        composerOrtho = !camera.isPerspectiveCamera;
+        applyPostprocessingSettings();
+    } catch (error) {
+        console.error('Постпроцессинг не загрузился, эффекты выключены:', error);
+        settings.ao = false;
+        settings.outline = false;
+        saveSettings();
+        setupSettingsPanel();
+    } finally {
+        composerLoading = false;
+    }
+}
+
+function applyPostprocessingSettings() {
+    if (!composerParts) return;
+    const { ao, outline } = composerParts;
+
+    ao.enabled = !!settings.ao;
+    ao.updateHbaoMaterial({
+        radius: settings.aoRadius,
+        distanceExponent: settings.aoFalloff
+    });
+
+    outline.enabled = !!settings.outline;
+    // Силуэт всей модели: OutlinePass обводит внешний контур выделенного.
+    outline.selectedObjects = (settings.outline && model) ? [model] : [];
+    outline.edgeStrength = settings.outlineStrength;
+    outline.edgeThickness = settings.outlineThickness;
+    outline.edgeGlow = 0;
+    outline.visibleEdgeColor.set(settings.outlineColor);
+    outline.hiddenEdgeColor.set(settings.outlineColor);
+}
+
+function applyPostprocessing() {
+    if (!postprocessingWanted()) {
+        // Оба эффекта выключены — освобождаем таргеты композера: на телефоне
+        // это два полноэкранных буфера, которые больше никому не нужны.
+        disposeComposer();
+        return;
+    }
+
+    if (!composer) {
+        ensureComposer();
+        return;
+    }
+
+    applyPostprocessingSettings();
+}
+
+// Вид сверху подменяет камеру на ортогональную, а SAOPass и OutlinePass зашивают
+// тип проекции в дефайны шейдеров при создании. Пересобрать композер надёжнее,
+// чем чинить дефайны по одному; переключение вида — событие редкое.
+function syncComposerCamera() {
+    if (!composer || !composerParts) return;
+
+    if (composerOrtho === !camera.isPerspectiveCamera) {
+        composerParts.render.camera = camera;
+        composerParts.ao.camera = camera;
+        composerParts.outline.renderCamera = camera;
+        return;
+    }
+
+    disposeComposer();
+    if (postprocessingWanted()) ensureComposer();
+}
+
+// ─── B5. Рёбра ────────────────────────────────────────────────────────────────
+// EdgesGeometry по всей модели — операция не бесплатная, поэтому строится лениво,
+// по включению тумблера, и кэшируется в edgesGeometryCache.
+// Толщина здесь не настраивается: linewidth у LineBasicMaterial в WebGL
+// игнорируется, линия всегда в пиксель. Толщина живёт у силуэтов (OutlinePass).
+
+function applyEdges() {
+    if (!model) return;
+
+    if (!settings.edges) {
+        removeHelperObjects();
+        return;
+    }
+
+    addEdgeLines();
+
+    if (edgesMaterial) {
+        edgesMaterial.color.set(settings.edgesColor);
+        edgesMaterial.transparent = settings.edgesOpacity < 1;
+        edgesMaterial.opacity = settings.edgesOpacity;
+        edgesMaterial.needsUpdate = true;
+    }
+}
+
 // Функция для смены HDR карты
 function changeHDR(index) {
     if (index < 0 || index >= HDR_MAPS.length) return;
@@ -2250,12 +2501,60 @@ function setupSettingsPanel() {
     addSlider(light, 'Поворот окружения', 'envRotation', 0, 360, 1, null, scheduleEnvironmentRebuild);
     addSlider(light, 'Азимут солнца', 'sunAzimuth', 0, 360, 1, applySun);
     addSlider(light, 'Высота солнца', 'sunElevation', -10, 90, 1, applySun);
+    // Стоит рядом с тенями не случайно: тень бросает только этот источник,
+    // и на слабом солнце её попросту не видно.
+    addSlider(light, 'Сила солнца', 'sunIntensity', 0, 3, 0.05, applySun);
+    addToggle(light, 'Тени от солнца', 'shadows', () => { applyShadows(); setupSettingsPanel(); });
+    if (settings.shadows) {
+        addChoice(
+            light,
+            [{ name: '1024', value: 1024 }, { name: '2048', value: 2048 }, { name: '4096', value: 4096 }],
+            (value) => value === settings.shadowQuality,
+            (value) => { settings.shadowQuality = value; saveSettings(); applyShadows(); }
+        );
+    }
     panel.appendChild(light);
 
     // ── Отображение ──────────────────────────────────────────────────────────
     const display = settingsSection('Отображение');
     addToggle(display, 'Двусторонний рендер', 'doubleSided', applyMaterialSettings);
     addToggle(display, 'Прозрачность по маске', 'maskedTransparency', applyMaterialSettings);
+
+    // Затенение и силуэты идут через композер: включение подтягивает модули
+    // постпроцессинга, выключение освобождает его таргеты.
+    addToggle(display, 'Затенение (AO)', 'ao', () => { applyPostprocessing(); setupSettingsPanel(); });
+    if (settings.ao) {
+        addSlider(display, 'Радиус AO', 'aoRadius', 0.5, 20, 0.5, applyPostprocessingSettings);
+        // «Сила» была бы понятнее, но в HBAOPass 0.159 её нет: результат
+        // домножается общим CopyShader'ом, и интенсивность без переопределения
+        // render() не выкрутить. Спад по расстоянию — ближайшая замена.
+        addSlider(display, 'Спад AO', 'aoFalloff', 0.5, 4, 0.1, applyPostprocessingSettings);
+    }
+
+    addToggle(display, 'Силуэты', 'outline', () => { applyPostprocessing(); setupSettingsPanel(); });
+    if (settings.outline) {
+        addSlider(display, 'Толщина силуэта', 'outlineThickness', 0.5, 4, 0.1, applyPostprocessingSettings);
+        addSlider(display, 'Сила силуэта', 'outlineStrength', 0.5, 10, 0.1, applyPostprocessingSettings);
+        addColor(display, 'Цвет силуэта', 'outlineColor', applyPostprocessingSettings);
+    }
+
+    // Рёбра — не постпроцессинг, а честная геометрия: строятся по модели
+    // и потому включаются заметной паузой на тяжёлых сценах.
+    addToggle(display, 'Рёбра', 'edges', () => { applyEdges(); setupSettingsPanel(); });
+    if (settings.edges) {
+        addSlider(display, 'Прозрачность рёбер', 'edgesOpacity', 0.05, 1, 0.05, applyEdges);
+        addColor(display, 'Цвет рёбер', 'edgesColor', applyEdges);
+    }
+
+    // Кадры в секунду: эффекты стоят по-разному на разных моделях, и решать,
+    // что оставить, надо по замеру.
+    const fpsRow = settingsRow(display, 'Кадров в секунду');
+    const fps = document.createElement('span');
+    fps.className = 'settings-value';
+    fps.id = 'fps-value';
+    fps.textContent = String(fpsValue || '—');
+    fpsRow.appendChild(fps);
+
     panel.appendChild(display);
 
     // ── Фон ──────────────────────────────────────────────────────────────────
@@ -2762,8 +3061,12 @@ async function loadModel() {
 
             // Сторона, прозрачность, сила окружения и анизотропия — одним проходом
             prepareModelMaterials();
-            // Дальность тумана считается от габарита, поэтому пересчитываем на новой модели
+            // Туман и тени считаются от габарита, а силуэт держит ссылку на модель —
+            // всё это пересчитываем на новой модели
             applyFog();
+            applyShadows();
+            applyEdges();
+            applyPostprocessingSettings();
 
         saveOriginalMaterialsState();
         
@@ -2827,6 +3130,10 @@ async function loadModel() {
 // Настройка текстур из неё переехала в prepareModelMaterials().
 
 function onWindowResize() {
+    // Обработчик висит на window и срабатывает раньше init(): рендерера ещё нет,
+    // и до этой проверки ресайз падал с TypeError.
+    if (!renderer || !container) return;
+
     const width = container.clientWidth;
     const height = container.clientHeight;
     
@@ -2839,6 +3146,12 @@ function onWindowResize() {
     // Кэп повторяем и здесь: при переносе окна между экранами devicePixelRatio меняется
     renderer.setPixelRatio(cappedPixelRatio());
     renderer.setSize(width, height);
+
+    // setSize у композера сам домножает на pixelRatio и раздаёт размер проходам
+    if (composer) {
+        composer.setPixelRatio(cappedPixelRatio());
+        composer.setSize(width, height);
+    }
     
     // Пока пользователь не трогал камеру, держим модель вписанной в кадр: поворот
     // телефона в портрет иначе обрезает её по краям. После первого жеста не вмешиваемся.
@@ -2869,7 +3182,39 @@ function animate() {
 
     updateWASDControls();
 
-    if (renderer && scene && camera) renderer.render(scene, camera);
+    if (renderer && scene && camera) {
+        // Эффекты выключены — рендерим напрямую, ровно как до этапа B.
+        // Композер вступает в дело только когда включён AO или силуэты.
+        if (composer && postprocessingWanted()) {
+            composer.render();
+        } else {
+            renderer.render(scene, camera);
+        }
+    }
+
+    trackFps();
+}
+
+// Кадры в секунду: решение «включать AO или нет» принимается по замеру, а не
+// на глаз, поэтому счётчик показывается прямо в панели настроек.
+let fpsFrames = 0;
+let fpsSince = 0;
+let fpsValue = 0;
+
+function trackFps() {
+    const now = performance.now();
+    if (!fpsSince) { fpsSince = now; return; }
+
+    fpsFrames++;
+    const elapsed = now - fpsSince;
+    if (elapsed < 500) return;
+
+    fpsValue = Math.round((fpsFrames * 1000) / elapsed);
+    fpsFrames = 0;
+    fpsSince = now;
+
+    const indicator = document.getElementById('fps-value');
+    if (indicator) indicator.textContent = String(fpsValue);
 }
 
 // Добавляем функциональность UI элементов
@@ -3489,6 +3834,7 @@ function exitTopViewImmediate() {
     controls.object = camera;
     controls.enableRotate = true;
     controls.update();
+    syncComposerCamera();
 
     isTopView = false;
     updateTopViewButton();
@@ -3531,6 +3877,7 @@ function setTopView(enabled) {
     }
 
     controls.update();
+    syncComposerCamera();
     isTopView = enabled;
     updateTopViewButton();
 }
@@ -3594,7 +3941,6 @@ function clearEdgesCache() {
 }
 
 function addEdgeLines() {
-    console.log('Добавляем ребра в режиме Скетч');
     
     // Удаляем старые ребра, если они есть
     removeHelperObjects();
@@ -3836,14 +4182,11 @@ function removeHelperObjects() {
             
             if (node.userData.wireframeHelper) {
                 node.remove(node.userData.wireframeHelper);
-                
-                if (node.userData.wireframeHelper.geometry) {
-                    node.userData.wireframeHelper.geometry.dispose();
-                }
-                if (node.userData.wireframeHelper.material) {
-                    node.userData.wireframeHelper.material.dispose();
-                }
-                
+
+                // Ни геометрию, ни материал здесь не освобождаем: геометрия лежит
+                // в edgesGeometryCache и переиспользуется, материал общий на всю
+                // модель. Прежняя версия убивала и то и другое при каждом
+                // переключении, то есть кэш существовал только на бумаге.
                 node.userData.wireframeHelper = null;
                 removed++;
             }
@@ -4752,6 +5095,15 @@ const ANISO_MAPS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap',
 
 function prepareModelMaterials() {
     if (!model || !renderer) return;
+
+    // Тени включаются тумблером, но флаги на мешах ставим сразу: они ничего
+    // не стоят, пока renderer.shadowMap.enabled = false.
+    model.traverse((node) => {
+        if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+        }
+    });
 
     fileMaterialState.clear();
     // Анизотропия не ставилась нигде, и полы, фасады и дороги под скользящим углом

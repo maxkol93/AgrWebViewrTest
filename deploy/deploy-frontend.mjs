@@ -152,6 +152,15 @@ const ADDON_ENTRIES = [
   'loaders/DRACOLoader.js',
   'loaders/RGBELoader.js',
   'exporters/GLTFExporter.js',
+  // Постпроцессинг (этап B). script.js тянет их динамическим import(), поэтому
+  // от статических импортов граф сюда не доходит — список только руками.
+  // Забыть строку здесь = 404 в рантайме на стенде при локально рабочей сборке.
+  'postprocessing/EffectComposer.js',
+  'postprocessing/RenderPass.js',
+  'postprocessing/HBAOPass.js',
+  'postprocessing/OutlinePass.js',
+  'postprocessing/SMAAPass.js',
+  'postprocessing/OutputPass.js',
 ];
 
 const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)['"]([^'"]+)['"]/g;
