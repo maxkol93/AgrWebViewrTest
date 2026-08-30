@@ -992,6 +992,12 @@ function toggleHelpPanel() {
 
 let container = document.getElementById('container');
 let camera, scene, renderer, controls, model, envMap;
+
+// Перспективная камера — основная; ортогональная создаётся лениво под вид сверху.
+// Глобальная camera всегда указывает на активную: от неё зависят рендер, рейкасты и WASD.
+let perspectiveCamera = null;
+let orthoCamera = null;
+let isTopView = false;
 let customTextures = {};
 let modelSelect; 
 
@@ -1000,22 +1006,12 @@ let mixer, animations = [];
 let mixers = [];
 let clock = new THREE.Clock();
 
-let currentDisplayMode = 'normal';
-
 const originalMaterialProps = new Map();
-
-const displayModesCache = {
-    normal: null,      
-    wireframe: null,   
-    'wireframe-solid': null  
-};
 
 const edgesGeometryCache = new Map();
 
 let edgesMaterial = null;
 
-let isCacheInitialized = false;
-let isCacheInitializing = false;
 
 let controlMode = 'orbit';
 
@@ -1075,27 +1071,6 @@ function handleKeyDown(e) {
             controls.autoRotate = true;
             console.log('Автовращение включено');
         }
-    }
-    
-    // Обработчик клавиши 1 - переключение в обычный режим
-    if (e.key === '1') {
-        console.log('Переключение в обычный режим');
-        setDisplayMode('normal');
-        updateDisplayModeUI('normal');
-    }
-    
-    // Обработчик клавиши 2 - переключение в режим каркас
-    if (e.key === '2') {
-        console.log('Переключение в режим каркас');
-        setDisplayMode('wireframe');
-        updateDisplayModeUI('wireframe');
-    }
-    
-    // Обработчик клавиши 3 - переключение в режим Скетч
-    if (e.key === '3') {
-        console.log('Переключение в режим Скетч');
-        setDisplayMode('wireframe-solid');
-        updateDisplayModeUI('wireframe-solid');
     }
     
     // Обработчик клавиши G - переключение между обычным режимом и wasd управлением
@@ -1161,8 +1136,52 @@ function handleKeyUp(e) {
 window.addEventListener('keydown', handleKeyDown);
 window.addEventListener('keyup', handleKeyUp);
 
+// Направление, с которого смотрим на модель по умолчанию. Дистанция вдоль него
+// считается по габаритам и пропорциям окна (см. framingDistance), а не константой:
+// на портретном экране кадр уже, и с фиксированной точки модель вылезала за края.
+const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(200, 100, 200).normalize();
+const FALLBACK_VIEW_DISTANCE = 300;
+
+// Минимальная дистанция, с которой вся модель попадает в кадр. Считаем по восьми углам
+// bounding box: для каждого угла нужно, чтобы он уложился и по вертикали, и по горизонтали.
+// Сфера дала бы более грубую оценку и отодвигала камеру дальше, чем нужно.
+function framingDistance() {
+    if (!model || !perspectiveCamera) return FALLBACK_VIEW_DISTANCE;
+
+    const box = new THREE.Box3().setFromObject(model);
+    if (box.isEmpty()) return FALLBACK_VIEW_DISTANCE;
+
+    const center = box.getCenter(new THREE.Vector3());
+    const forward = DEFAULT_VIEW_DIRECTION.clone().negate();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+
+    const aspect = perspectiveCamera.aspect || 1;
+    const vTan = Math.tan(THREE.MathUtils.degToRad(perspectiveCamera.fov) / 2);
+    const hTan = vTan * aspect;
+
+    let needed = 0;
+    const corner = new THREE.Vector3();
+    for (let i = 0; i < 8; i++) {
+        corner.set(
+            (i & 1) ? box.max.x : box.min.x,
+            (i & 2) ? box.max.y : box.min.y,
+            (i & 4) ? box.max.z : box.min.z
+        ).sub(center);
+
+        const depth = corner.dot(forward);
+        needed = Math.max(
+            needed,
+            Math.abs(corner.dot(up)) / vTan - depth,
+            Math.abs(corner.dot(right)) / hTan - depth
+        );
+    }
+
+    return needed * 1.06; // немного воздуха по краям
+}
+
 function setupInitialCameraState() {
-    initialCameraPosition = new THREE.Vector3(200, 100, 200);
+    initialCameraPosition = DEFAULT_VIEW_DIRECTION.clone().multiplyScalar(framingDistance());
     initialTarget = new THREE.Vector3(0, 0, 0);
     
     const direction = new THREE.Vector3().subVectors(initialTarget, initialCameraPosition).normalize();
@@ -1257,6 +1276,9 @@ function toggleControlMode() {
         // Переключаемся в режим WASD
         controlMode = 'wasd';
         
+        // В WASD летаем только перспективной камерой
+        if (isTopView) setTopView(false);
+        
         // Показываем индикатор скорости
         const speedControl = document.getElementById('speed-control');
         if (speedControl) speedControl.style.display = 'inline-block';
@@ -1317,21 +1339,27 @@ function toggleControlMode() {
         // Полностью обнуляем вектор скорости
         currentVelocity = new THREE.Vector3(0, 0, 0);
         
-        // Возвращаем камеру в начальное положение
-        camera.position.copy(initialCameraPosition);
+        // Камеру оставляем там, где пользователь остановился: раньше здесь стоял
+        // camera.position.copy(initialCameraPosition), и переключение режима отбрасывало
+        // на старт всё, что человек прошёл пешком. Обратный переход позицию сохранял —
+        // теперь оба направления ведут себя одинаково.
         
         // Включаем стандартные контролы
         controls.enabled = true;
         
-        // Восстанавливаем ограничения для Orbit-режима
-        controls.maxPolarAngle = Math.PI / 1.5;
-        controls.minPolarAngle = Math.PI / 6;
+        // Ограничения полюсов сняты и здесь — см. настройку контролов в init()
+        controls.minPolarAngle = 0;
+        controls.maxPolarAngle = Math.PI;
         
-        // Устанавливаем точку обзора в начальное положение
-        controls.target.copy(initialTarget);
+        // Цель орбиты — перед камерой, на комфортной дистанции обзора, чтобы вращение
+        // началось вокруг того, на что человек смотрел в WASD, а не вокруг центра сцены.
+        const forwardOnExit = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const exitTarget = camera.position.clone().add(forwardOnExit.multiplyScalar(100));
+        controls.target.copy(exitTarget);
         
-        // Включаем автовращение
-        controls.autoRotate = true;
+        // Автоповорот не включаем: человек пришёл сюда из ручного управления,
+        // самопроизвольное вращение читается как потеря контроля.
+        controls.autoRotate = false;
         
         // Обновляем контролы для применения изменений
         controls.update();
@@ -1652,6 +1680,10 @@ function updateWASDControls() {
 
 let currentModelPath = '';
 
+// Ставится при первом жесте по сцене: после него автоматическое кадрирование
+// (в onWindowResize) больше не двигает камеру за пользователя.
+let userMovedCamera = false;
+
 const USE_HDR = true;
 // Список HDR карт (лежат в Object Storage под префиксом environments/)
 const HDR_MAPS = [
@@ -1667,6 +1699,13 @@ function getHdrUrl(path) {
         throw new Error('Хранилище не настроено, невозможно получить URL HDR');
     }
     return `${STORAGE_BASE_URL}/environments/${path}`;
+}
+
+// Плотность пикселей: выше двойки разница уже не видна, а на телефоне с dpr 3 это
+// в 2.25 раза больше работы на каждый кадр.
+function cappedPixelRatio() {
+    const limit = window.matchMedia('(max-width: 768px)').matches ? 1.5 : 2;
+    return Math.min(window.devicePixelRatio || 1, limit);
 }
 
 // Инициализация 3D сцены перенесена в основной блок DOMContentLoaded
@@ -1693,6 +1732,7 @@ async function init() {
     const height = container.clientHeight;
     
     camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
+    perspectiveCamera = camera;
     
     setupInitialCameraState();
     camera.position.copy(initialCameraPosition);
@@ -1702,14 +1742,15 @@ async function init() {
         alpha: false,  // Отключаем alpha-канал - как в оригинальной версии
         preserveDrawingBuffer: true
     });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(cappedPixelRatio());
     renderer.setSize(width, height);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.8;
     
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Ни один источник не отбрасывает тени, поэтому карта теней сейчас только числится
+    // включённой. Настоящие тени — этап B (статическая карта), там же и включим.
+    renderer.shadowMap.enabled = false;
     
     // Базовые настройки для прозрачности - как в оригинальной версии
     renderer.sortObjects = true;
@@ -1739,10 +1780,14 @@ async function init() {
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
     controls.screenSpacePanning = true;
-    controls.minDistance = 50;
-    controls.maxDistance = 500;
-    controls.maxPolarAngle = Math.PI / 1.5;
-    controls.minPolarAngle = Math.PI / 6;
+    // Модель нормализована в куб 200 единиц (см. loadModel), поэтому границы заданы
+    // от этого габарита: 0.2 — вплотную к детали, 1200 — вся сцена с запасом.
+    controls.minDistance = 0.2;
+    controls.maxDistance = 1200;
+    // Полюса не ограничиваем: нужен и вид сверху (план площадки), и взгляд снизу.
+    // OrbitControls сам клампит полюс на EPS, отдельная защита не нужна.
+    controls.minPolarAngle = 0;
+    controls.maxPolarAngle = Math.PI;
     controls.enableZoom = true;
     controls.zoomSpeed = 0.55; // Единая скорость зума для всех вариантов
     controls.rotateSpeed = 1.0;
@@ -1752,9 +1797,20 @@ async function init() {
     
     // Включаем зум к курсору только для колесика мыши
     controls.zoomToCursor = true;
+
+    // Жесты на тач-экране полностью на стороне OrbitControls: один палец — вращение,
+    // два — зум с панорамированием. Свой pinch-обработчик отсюда убран (он двигал
+    // camera.position параллельно с DOLLY_PAN, отчего жест дёргался).
+    controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
     
     // Оставляем стандартное поведение OrbitControls для средней кнопки мыши
     
+    // capture: наш обработчик должен успеть переставить цель до того, как
+    // OrbitControls запомнит стартовую сферу вращения
+    renderer.domElement.addEventListener('pointerdown', updateOrbitPivot, true);
+    renderer.domElement.addEventListener('dblclick', handlePivotDoubleClick);
+    renderer.domElement.addEventListener('pointerdown', () => { pivotFlightCancelled = true; });
+
     container.addEventListener('mousedown', disableAutoRotate);
     container.addEventListener('wheel', disableAutoRotate);
     container.addEventListener('touchstart', disableAutoRotate);
@@ -1762,6 +1818,7 @@ async function init() {
     container.addEventListener('touchstart', handleTouchStart, { passive: false });
     container.addEventListener('touchmove', handleTouchMove, { passive: false });
     container.addEventListener('touchend', handleTouchEnd, { passive: false });
+    container.addEventListener('touchcancel', handleTouchEnd, { passive: false });
     
     window.addEventListener('resize', onWindowResize);
 
@@ -1887,78 +1944,6 @@ function setupHDRInterface() {
     displayModeContainer.style.gap = '20px';
     displayModeContainer.style.padding = '15px';
     
-    // Создаем левую часть для режимов отображения
-    const displayModeLeft = document.createElement('div');
-    displayModeLeft.className = 'display-mode-left';
-    displayModeLeft.style.display = 'flex';
-    displayModeLeft.style.flexDirection = 'column';
-    displayModeLeft.style.gap = '12px';
-    displayModeLeft.style.borderRight = '1px solid rgba(255, 255, 255, 0.2)';
-    displayModeLeft.style.paddingRight = '20px';
-    displayModeLeft.style.flex = '1';
-    
-    // Создаем заголовок для режимов отображения
-    const displayModeTitle = document.createElement('div');
-    displayModeTitle.textContent = 'Отображение';
-    displayModeTitle.style.fontSize = '14px';
-    displayModeTitle.style.fontWeight = '500';
-    displayModeTitle.style.marginBottom = '10px';
-    displayModeTitle.style.textAlign = 'center';
-    displayModeTitle.style.width = '100%';
-    displayModeTitle.style.color = 'white';
-    displayModeLeft.appendChild(displayModeTitle);
-    
-    // Создаем контейнер для кнопок режимов отображения
-    const displayModeButtons = document.createElement('div');
-    displayModeButtons.id = 'display-mode-buttons';
-    displayModeButtons.style.display = 'flex';
-    displayModeButtons.style.flexDirection = 'column';
-    displayModeButtons.style.gap = '8px';
-    displayModeButtons.style.width = '100%';
-    
-    // Добавляем кнопки режимов отображения
-    const modes = [
-        { name: 'Обычный', mode: 'normal' },
-        { name: 'Каркас', mode: 'wireframe' },
-        { name: 'Скетч', mode: 'wireframe-solid' }
-    ];
-    
-    modes.forEach(item => {
-        const button = document.createElement('button');
-        button.className = 'display-mode-btn';
-        button.dataset.mode = item.mode;
-        button.textContent = item.name;
-        
-        // Определяем, является ли этот режим текущим
-        if (typeof currentDisplayMode !== 'undefined' && currentDisplayMode === item.mode) {
-            button.classList.add('active');
-        } else if (item.mode === 'normal' && (typeof currentDisplayMode === 'undefined' || !currentDisplayMode)) {
-            button.classList.add('active');
-        }
-        
-        // Добавляем обработчик клика
-        button.addEventListener('click', function() {
-            // Находим текущий выбранный режим
-            const currentModeButton = displayModeButtons.querySelector('.display-mode-btn.active');
-            if (currentModeButton) {
-                currentModeButton.classList.remove('active');
-            }
-            
-            // Устанавливаем новый режим активным
-            button.classList.add('active');
-            
-            // Применяем режим отображения
-            if (typeof setDisplayMode === 'function') {
-                setDisplayMode(item.mode);
-            }
-        });
-        
-        displayModeButtons.appendChild(button);
-    });
-    
-    // Добавляем кнопки в левую часть
-    displayModeLeft.appendChild(displayModeButtons);
-    
     // Создаем правую часть для HDR кнопок
     const displayModeRight = document.createElement('div');
     displayModeRight.className = 'display-mode-right';
@@ -2013,8 +1998,7 @@ function setupHDRInterface() {
         hdrButtons.appendChild(button);
     });
     
-    // Добавляем левую и правую части в контейнер
-    displayModeContainer.appendChild(displayModeLeft);
+    // Колонка «Отображение» удалена вместе с режимами; осталось освещение
     displayModeContainer.appendChild(displayModeRight);
     
     // Добавляем обработку нажатия клавиш для переключения HDR
@@ -2026,17 +2010,6 @@ function setupHDRInterface() {
                 // Находим и симулируем клик на соответствующей кнопке
                 const hdrBtn = document.querySelector(`.hdr-btn[data-hdr-index="${index}"]`);
                 if (hdrBtn) hdrBtn.click();
-            }
-        }
-        
-        // Клавиши 1, 2, 3 для переключения режимов отображения
-        if (e.key >= '1' && e.key <= '3') {
-            const modeIndex = parseInt(e.key) - 1;
-            const modes = ['normal', 'wireframe', 'wireframe-solid'];
-            if (modeIndex >= 0 && modeIndex < modes.length) {
-                // Находим и симулируем клик на соответствующей кнопке
-                const modeBtn = document.querySelector(`.display-mode-btn[data-mode="${modes[modeIndex]}"]`);
-                if (modeBtn) modeBtn.click();
             }
         }
     });
@@ -2382,7 +2355,7 @@ async function loadModel() {
                 }
             });
             
-            clearDisplayModesCache();
+            clearEdgesCache();
         }
         
         // Устанавливаем загруженную модель в качестве текущей
@@ -2499,6 +2472,8 @@ async function loadModel() {
         
         saveOriginalMaterialsState();
         
+        // Новая модель — новое кадрирование: до первого жеста им снова управляем мы
+        userMovedCamera = false;
         setupInitialCameraState();
         
         if (controlMode === 'wasd') {
@@ -2516,37 +2491,7 @@ async function loadModel() {
             animateFirstView();
         }
         
-        if (currentDisplayMode !== 'normal') {
-            setTimeout(() => {
-                applyDisplayModeToNewModel(currentDisplayMode);
-            }, 300);
-        } else {
-            document.querySelector('.loading').style.display = 'none';
-            
-            let idleTimer = null;
-            
-            const startIdleInitialization = () => {
-                if (idleTimer) clearTimeout(idleTimer);
-                
-                idleTimer = setTimeout(() => {
-                    if (!isCacheInitialized && !isCacheInitializing) {
-                        initDisplayModesCacheAsync();
-                        
-                        document.removeEventListener('mousemove', startIdleInitialization);
-                        document.removeEventListener('keydown', startIdleInitialization);
-                        document.removeEventListener('click', startIdleInitialization);
-                        document.removeEventListener('wheel', startIdleInitialization);
-                    }
-                }, 5000);
-            };
-            
-            document.addEventListener('mousemove', startIdleInitialization);
-            document.addEventListener('keydown', startIdleInitialization);
-            document.addEventListener('click', startIdleInitialization);
-            document.addEventListener('wheel', startIdleInitialization);
-            
-            startIdleInitialization();
-        }
+        document.querySelector('.loading').style.display = 'none';
         
         // Если это локальный файл, обновляем выпадающий список и добавляем пользовательскую опцию
         if (isLocalFile) {
@@ -2640,10 +2585,24 @@ function onWindowResize() {
     const width = container.clientWidth;
     const height = container.clientHeight;
     
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
+    if (perspectiveCamera) {
+        perspectiveCamera.aspect = width / height;
+        perspectiveCamera.updateProjectionMatrix();
+    }
+    updateOrthoFrustum();
     
+    // Кэп повторяем и здесь: при переносе окна между экранами devicePixelRatio меняется
+    renderer.setPixelRatio(cappedPixelRatio());
     renderer.setSize(width, height);
+    
+    // Пока пользователь не трогал камеру, держим модель вписанной в кадр: поворот
+    // телефона в портрет иначе обрезает её по краям. После первого жеста не вмешиваемся.
+    if (!userMovedCamera && !isTopView && controlMode === 'orbit' && model && controls) {
+        setupInitialCameraState();
+        camera.position.copy(initialCameraPosition);
+        controls.target.copy(initialTarget);
+        controls.update();
+    }
     
 
     windowHalfX = width / 2;
@@ -2672,6 +2631,12 @@ function animate() {
 function setupUI() {
     console.log('Инициализация UI...');
     // Получаем элементы управления
+    const topViewButton = document.getElementById('top-view');
+    if (topViewButton) {
+        topViewButton.addEventListener('click', toggleTopView);
+        updateTopViewButton();
+    }
+    
     const resetCameraButton = document.getElementById('reset-camera');
     const toggleControlButton = document.getElementById('toggle-control');
     const helpIcon = document.getElementById('help-icon');
@@ -2773,22 +2738,6 @@ function setupUI() {
     // Переключение режима управления
     toggleControlButton.addEventListener('click', toggleControlMode);
     
-    // Настройка кнопок режимов отображения
-    const modeButtons = document.querySelectorAll('.display-mode-btn');
-    
-    // Подсвечиваем активный режим отображения при запуске
-    updateDisplayModeUI(currentDisplayMode);
-    
-    // Добавляем обработчики для всех кнопок режима отображения
-    modeButtons.forEach(button => {
-        button.addEventListener('click', function() {
-            const mode = this.getAttribute('data-mode');
-            setDisplayMode(mode);
-            // Обновляем визуально кнопки
-            updateDisplayModeUI(mode);
-        });
-    });
-    
     // Полностью переписываем обработчик для кнопки вопроса
     if (helpIcon) {
         // Удаляем все существующие обработчики
@@ -2829,43 +2778,7 @@ function setupUI() {
     setupAnimationControls();
 }
 
-// Функция для обновления UI режима отображения
-function updateDisplayModeUI(mode) {
-    const modeButtons = document.querySelectorAll('.display-mode-btn');
-    
-    // Сбрасываем активный класс для всех кнопок
-    modeButtons.forEach(button => {
-        button.classList.remove('active');
-        // Удаляем любые дополнительные выделения
-        button.style.border = '';
-        button.style.boxShadow = '';
-        button.style.backgroundColor = '';
-        button.style.color = '';
-        button.style.fontWeight = '';
-    });
-    
-    // Устанавливаем активный класс для выбранной кнопки
-    const activeButton = document.querySelector(`.display-mode-btn[data-mode="${mode}"]`);
-    if (activeButton) {
-        activeButton.classList.add('active');
-        
-        // Проверяем, на мобильном ли устройстве (через медиа-запрос)
-        const isMobile = window.matchMedia('(hover: none)').matches;
-        
-        // Если на мобильном устройстве, добавляем дополнительные стили
-        if (isMobile) {
-            // Явно устанавливаем стили для активной кнопки
-            activeButton.style.backgroundColor = '#4285f4';
-            activeButton.style.color = 'white';
-            activeButton.style.fontWeight = 'bold';
-            activeButton.style.boxShadow = '0 0 12px rgba(66, 133, 244, 0.8)';
-            activeButton.style.border = '2px solid white';
-            
-            // Принудительная перерисовка DOM для применения стилей
-            activeButton.offsetHeight;
-        }
-    }
-}
+
 
 if (document.readyState === 'loading') {
     // Убрано дублирование DOMContentLoaded - вся инициализация в основном блоке
@@ -2875,9 +2788,6 @@ function loadSelectedModel() {
     const selectedModelPath = modelSelect.value;
     if (selectedModelPath && selectedModelPath !== currentModelPath) {
 
-        const savedDisplayMode = currentDisplayMode;
-        
-        
 
         if (model) {
             scene.remove(model);
@@ -2906,7 +2816,7 @@ function loadSelectedModel() {
             });
             
 
-            clearDisplayModesCache();
+            clearEdgesCache();
         }
         
 
@@ -2938,12 +2848,6 @@ function loadSelectedModel() {
             // Кнопка loadModelButton заменена на кнопку "Поделиться"
             
 
-            if (savedDisplayMode !== 'normal') {
-
-                setTimeout(() => {
-                    applyDisplayModeToNewModel(savedDisplayMode);
-                }, 300);
-            }
         }).catch(error => {
             console.error('Ошибка при загрузке модели:', error);
             
@@ -2954,6 +2858,10 @@ function loadSelectedModel() {
 }
 
 function resetCamera(immediate = false) {
+    // Сброс всегда возвращает в обычную перспективу: иначе «Сброс камеры» в ортовиде
+    // выглядит так, будто он не сработал.
+    if (isTopView) setTopView(false);
+
     const resetPos = () => {
         // Сохраняем оригинальную позицию и ориентацию
         camera.position.copy(initialCameraPosition);
@@ -3094,8 +3002,155 @@ function resetCamera(immediate = false) {
     requestAnimationFrame(animateReset);
 }
 
+// ─── K3. Центр орбиты по геометрии ─────────────────────────────────────────────
+// Раньше controls.target всегда стоял в центре модели, поэтому вблизи стены радиус
+// орбиты был огромен относительно того, что видно на экране, — камера «улетала».
+// Теперь на каждое нажатие один рейкаст под курсором: цель ставится на ось взгляда
+// на глубине попадания. Ось важна: OrbitControls в update() делает lookAt(target),
+// и цель в стороне от оси развернула бы камеру рывком. На оси разворот нулевой,
+// а радиус орбиты берётся от реальной геометрии — что и требовалось.
+
+const pivotRaycaster = new THREE.Raycaster();
+const pivotPointer = new THREE.Vector2();
+
+function pointerToNDC(event, out) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    out.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    out.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    return true;
+}
+
+function raycastModel(event) {
+    if (!model || !camera) return null;
+    if (!pointerToNDC(event, pivotPointer)) return null;
+    pivotRaycaster.setFromCamera(pivotPointer, camera);
+    const hits = pivotRaycaster.intersectObject(model, true);
+    return hits.length ? hits[0] : null;
+}
+
+function updateOrbitPivot(event) {
+    if (controlMode !== 'orbit' || !controls || !controls.enabled) return;
+    if (isUIElement(event.target)) return;
+    // Второй палец — это жест зума OrbitControls, пивот по нему не двигаем
+    if (event.pointerType === 'touch' && event.isPrimary === false) return;
+
+    const hit = raycastModel(event);
+    if (!hit) return;
+
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    controls.target.copy(camera.position).addScaledVector(forward, hit.distance);
+    controls.update();
+}
+
+// Двойной клик — «поставить пивот сюда»: в отличие от нажатия, цель переносится
+// в саму точку попадания, а не на ось взгляда. Разворот камеры здесь уместен,
+// это явный жест, поэтому он сглажен анимацией.
+let pivotFlightCancelled = false;
+
+function flyPivotTo(destination) {
+    const start = controls.target.clone();
+    const duration = 400;
+    const startTime = performance.now();
+    pivotFlightCancelled = false;
+
+    function step(time) {
+        if (pivotFlightCancelled) return;
+        const progress = Math.min((time - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        controls.target.lerpVectors(start, destination, eased);
+        controls.update();
+        if (progress < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+}
+
+function handlePivotDoubleClick(event) {
+    if (controlMode !== 'orbit' || !controls || !controls.enabled) return;
+    if (isUIElement(event.target)) return;
+
+    const hit = raycastModel(event);
+    if (!hit) return;
+
+    controls.autoRotate = false;
+    flyPivotTo(hit.point.clone());
+}
+
+// ─── K2. Ортогональный вид сверху ──────────────────────────────────────────────
+// OrbitControls умеет работать с обеими камерами, достаточно подменить controls.object.
+// Ортокамера создаётся лениво, фрустум считается от габарита модели и пропорций окна.
+
+function modelViewRadius() {
+    if (!model) return 150;
+    const box = new THREE.Box3().setFromObject(model);
+    if (box.isEmpty()) return 150;
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    return sphere.radius > 0 ? sphere.radius : 150;
+}
+
+function updateOrthoFrustum() {
+    if (!orthoCamera) return;
+    const width = container.clientWidth || 1;
+    const height = container.clientHeight || 1;
+    const half = modelViewRadius() * 1.1;
+    const halfWidth = half * (width / height);
+
+    orthoCamera.left = -halfWidth;
+    orthoCamera.right = halfWidth;
+    orthoCamera.top = half;
+    orthoCamera.bottom = -half;
+    orthoCamera.updateProjectionMatrix();
+}
+
+function ensureOrthoCamera() {
+    if (!orthoCamera) {
+        orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 4000);
+        // Вверх экрана смотрит -Z: иначе up окажется параллелен направлению взгляда
+        orthoCamera.up.set(0, 0, -1);
+    }
+    updateOrthoFrustum();
+    return orthoCamera;
+}
+
+function setTopView(enabled) {
+    if (!controls || enabled === isTopView) return;
+
+    // В WASD ортокамера смысла не имеет — возвращаемся в орбитальный режим
+    if (enabled && controlMode === 'wasd') toggleControlMode();
+
+    isTopView = enabled;
+
+    if (enabled) {
+        const ortho = ensureOrthoCamera();
+        const height = Math.max(modelViewRadius() * 4, 500);
+        ortho.position.set(controls.target.x, controls.target.y + height, controls.target.z);
+        ortho.lookAt(controls.target);
+        camera = ortho;
+    } else {
+        camera = perspectiveCamera;
+    }
+
+    controls.object = camera;
+    controls.update();
+    userMovedCamera = true;
+    updateTopViewButton();
+}
+
+function toggleTopView() {
+    setTopView(!isTopView);
+}
+
+function updateTopViewButton() {
+    const button = document.getElementById('top-view');
+    if (!button) return;
+    button.textContent = isTopView ? 'Обычный вид' : 'Вид сверху';
+    button.classList.toggle('active', isTopView);
+}
+
 function disableAutoRotate(event) {
     if (isUIElement(event.target)) return;
+    
+    userMovedCamera = true;
     
     if (controlMode === 'orbit' && controls.autoRotate) {
         controls.autoRotate = false;
@@ -3116,585 +3171,27 @@ function resetAnimation() {
     }
 }
 
-let isWireframeMode = false;
-
-function initDisplayModesCacheAsync() {
-    if (!model || isCacheInitialized || isCacheInitializing) return Promise.resolve();
-    
-    
-    isCacheInitializing = true;
-    
-    return new Promise((resolve) => {
-
-        setTimeout(() => {
-            const startTime = performance.now();
-            
-
-            initDisplayModesCache();
-            
-            const endTime = performance.now();
-            
-            
-            isCacheInitializing = false;
-            resolve();
-        }, 10); // Минимальная задержка для обеспечения асинхронности
-    });
-}
-
-function applyDisplayModeToNewModel(mode) {
-
-    if (mode === 'normal') {
-        updateDisplayModeUI(mode);
-        return Promise.resolve();
-    }
-    
-
-    const loadingElement = document.querySelector('.loading');
-    loadingElement.textContent = `Настройка режима отображения...`;
-    loadingElement.style.display = 'block';
-    
-
-    return new Promise((resolve) => {
-        setTimeout(() => {
-
-            initDisplayModeCacheLazy(mode);
-            
-
-            setDisplayMode(mode);
-            
-
-            loadingElement.style.display = 'none';
-            
-
-            updateDisplayModeUI(mode);
-            resolve();
-        }, 50); // Небольшая задержка для обновления UI
-    });
-}
-
-function initDisplayModesCache() {
-    if (!model || isCacheInitialized) return;
-    
-    
-    
-
-    const currentMode = currentDisplayMode;
-    
-
-    const materials = collectMaterials();
-    
-    if (materials.size === 0) {
-        console.warn('Не найдены материалы для кэширования режимов отображения');
-        return;
-    }
-    
-    // Безопасное удаление onBeforeRender со всех мешей
-    model.traverse((node) => {
-        if (node.isMesh && node.hasOwnProperty('onBeforeRender')) {
-            delete node.onBeforeRender;
-        }
-    });
-
-    displayModesCache.normal = new Map();
-    materials.forEach(material => {
-        displayModesCache.normal.set(material, material.clone());
-    });
-    
-    
-
-    // Wireframe режим
-    displayModesCache.wireframe = new Map();
-    materials.forEach(material => {
-        const wireframeMaterial = material.clone();
-        wireframeMaterial.wireframe = true;
-        wireframeMaterial.transparent = true;
-        wireframeMaterial.opacity = 0.6;
-        wireframeMaterial.color.set(0xdddddd);
-        if (wireframeMaterial.emissive) wireframeMaterial.emissive.set(0x000000);
-        wireframeMaterial.side = THREE.FrontSide; // Используем одностороннее отображение
-        wireframeMaterial.map = null;
-        wireframeMaterial.normalMap = null;
-        wireframeMaterial.roughnessMap = null;
-        wireframeMaterial.metalnessMap = null;
-        wireframeMaterial.aoMap = null;
-        wireframeMaterial.emissiveMap = null;
-        displayModesCache.wireframe.set(material, wireframeMaterial);
-    });
-    
-    
-
-
-    // Wireframe-solid режим
-    displayModesCache['wireframe-solid'] = new Map();
-    materials.forEach(material => {
-        const solidMaterial = material.clone();
-        solidMaterial.wireframe = false;
-        solidMaterial.transparent = false;
-        solidMaterial.opacity = 1.0;
-        solidMaterial.color.set(0xdddddd);
-        if (solidMaterial.emissive) solidMaterial.emissive.set(0x000000);
-        solidMaterial.side = THREE.FrontSide; // Используем одностороннее отображение
-        solidMaterial.map = null;
-        solidMaterial.normalMap = null;
-        solidMaterial.roughnessMap = null;
-        solidMaterial.metalnessMap = null;
-        solidMaterial.aoMap = null;
-        solidMaterial.emissiveMap = null;
-        solidMaterial.metalness = 0;
-        solidMaterial.roughness = 1;
-        solidMaterial.flatShading = true;
-        solidMaterial.polygonOffset = true;
-        solidMaterial.polygonOffsetFactor = 1;
-        solidMaterial.polygonOffsetUnits = 1;
-        displayModesCache['wireframe-solid'].set(material, solidMaterial);
-    });
-    
-    
-
-    if (!edgesMaterial) {
-        edgesMaterial = new THREE.LineBasicMaterial({
-            color: 0x000000,
-            linewidth: 1
-        });
-    }
-    
-
-    let edgesCount = 0;
-    
-    model.traverse((node) => {
-        if (node.isMesh && node.geometry) {
-
-            if (!edgesGeometryCache.has(node.geometry)) {
-
-                try {
-                    const edgesGeometry = new THREE.EdgesGeometry(node.geometry);
-                    edgesGeometryCache.set(node.geometry, edgesGeometry);
-                    edgesCount++;
-                } catch (error) {
-                    console.warn(`Ошибка при создании геометрии ребер: ${error.message}`);
-                }
-            }
-        }
-    });
-    
-    
-
-    isCacheInitialized = true;
-    
-    
-
-    setDisplayMode(currentMode);
-}
-
-function initDisplayModeCacheLazy(mode) {
-    if (!model || (displayModesCache[mode] && displayModesCache[mode].size > 0)) return;
-    
-    
-    
-
-    const materials = collectMaterials();
-    
-    if (materials.size === 0) {
-        console.warn('Не найдены материалы для кэширования режима отображения');
-        return;
-    }
-    
-    // Безопасное удаление onBeforeRender со всех мешей
-    model.traverse((node) => {
-        if (node.isMesh && node.hasOwnProperty('onBeforeRender')) {
-            delete node.onBeforeRender;
-        }
-    });
-
-    switch (mode) {
-        case 'normal':
-            if (!displayModesCache.normal) displayModesCache.normal = new Map();
-            materials.forEach(material => {
-                displayModesCache.normal.set(material, material.clone());
-            });
-            
-            break;
-            
-        case 'wireframe':
-            if (!displayModesCache.wireframe) displayModesCache.wireframe = new Map();
-            materials.forEach(material => {
-                const wireframeMaterial = material.clone();
-                wireframeMaterial.wireframe = true;
-                wireframeMaterial.transparent = true;
-                wireframeMaterial.opacity = 0.6;
-                wireframeMaterial.color.set(0xdddddd);
-                if (wireframeMaterial.emissive) wireframeMaterial.emissive.set(0x000000);
-                wireframeMaterial.side = THREE.FrontSide; // Используем одностороннее отображение
-                wireframeMaterial.map = null;
-                wireframeMaterial.normalMap = null;
-                wireframeMaterial.roughnessMap = null;
-                wireframeMaterial.metalnessMap = null;
-                wireframeMaterial.aoMap = null;
-                wireframeMaterial.emissiveMap = null;
-                displayModesCache.wireframe.set(material, wireframeMaterial);
-            });
-            
-            break;
-            
-        case 'wireframe-solid':
-            if (!displayModesCache['wireframe-solid']) displayModesCache['wireframe-solid'] = new Map();
-            
-
-            materials.forEach(material => {
-                const solidMaterial = material.clone();
-                solidMaterial.wireframe = false;
-                solidMaterial.transparent = false;
-                solidMaterial.opacity = 1.0;
-                solidMaterial.color.set(0xdddddd);
-                if (solidMaterial.emissive) solidMaterial.emissive.set(0x000000);
-                solidMaterial.side = THREE.FrontSide; // Используем одностороннее отображение
-                solidMaterial.map = null;
-                solidMaterial.normalMap = null;
-                solidMaterial.roughnessMap = null;
-                solidMaterial.metalnessMap = null;
-                solidMaterial.aoMap = null;
-                solidMaterial.emissiveMap = null;
-                solidMaterial.metalness = 0;
-                solidMaterial.roughness = 1;
-                solidMaterial.flatShading = true;
-                solidMaterial.polygonOffset = true;
-                solidMaterial.polygonOffsetFactor = 1;
-                solidMaterial.polygonOffsetUnits = 1;
-                displayModesCache['wireframe-solid'].set(material, solidMaterial);
-            });
-            
-            
-
-            if (!edgesMaterial) {
-                edgesMaterial = new THREE.LineBasicMaterial({
-                    color: 0x000000,
-                    linewidth: 1
-                });
-            }
-            
-
-            let edgesCount = 0;
-            model.traverse((node) => {
-                if (node.isMesh && node.geometry && !edgesGeometryCache.has(node.geometry)) {
-
-                    try {
-                        const edgesGeometry = new THREE.EdgesGeometry(node.geometry);
-                        edgesGeometryCache.set(node.geometry, edgesGeometry);
-                        edgesCount++;
-                    } catch (error) {
-                        console.warn(`Ошибка при создании геометрии ребер: ${error.message}`);
-                    }
-                }
-            });
-            
-            
-
-            break;
-    }
-}
-
-function setDisplayMode(mode) {
-    if (!model) {
-        
-        currentDisplayMode = mode; // Сохраняем для применения после загрузки
-
-        updateDisplayModeUI(mode);
-        return;
-    }
-
-    const startTime = performance.now();
-
-    if (currentDisplayMode === 'wireframe-solid' && mode !== 'wireframe-solid') {
-        removeHelperObjects();
-    }
-
-    if (!displayModesCache[mode] || displayModesCache[mode].size === 0) {
-
-        initDisplayModeCacheLazy(mode);
-    }
-
-    if (currentDisplayMode !== 'normal' && mode !== currentDisplayMode) {
-        if (mode !== 'wireframe-solid') {
-            restoreOriginalMaterials();
-        }
-    }
-
-    currentDisplayMode = mode;
-
-    switch (mode) {
-        case 'normal':
-            restoreOriginalMaterials();
-            removeHelperObjects();
-            break;
-            
-        case 'wireframe':
-            if (originalMaterialProps.size === 0) {
-                const materials = collectMaterials();
-                materials.forEach(material => {
-                    saveOriginalMaterialProps(material);
-                });
-            }
-
-            if (displayModesCache.wireframe && displayModesCache.wireframe.size > 0) {
-                applyMaterialsFromCache('wireframe');
-            } else {
-                applyWireframeMode();
-            }
-            
-            break;
-            
-        case 'wireframe-solid':
-            if (originalMaterialProps.size === 0) {
-                const materials = collectMaterials();
-                materials.forEach(material => {
-                    saveOriginalMaterialProps(material);
-                });
-            }
-
-            if (displayModesCache['wireframe-solid'] && displayModesCache['wireframe-solid'].size > 0) {
-                applyMaterialsFromCache('wireframe-solid');
-            } else {
-                applyWireframeSolidModeNoCache();
-            }
-
-            if (renderer && scene && camera) {
-                renderer.render(scene, camera);
-            }
-
-            requestAnimationFrame(() => {
-                addEdgeLines();
-
-                if (renderer && scene && camera) {
-                    renderer.render(scene, camera);
-                }
-            });
-            
-            break;
-    }
-    
-    // Принудительно устанавливаем одностороннее отображение для всех материалов
-    forceFrontSideMaterials();
-
-    // Принудительное обновление UI с таймаутом для гарантированного применения
-    setTimeout(() => {
-        updateDisplayModeUI(mode);
-    }, 0);
-
-    const endTime = performance.now();
-    
-}
-
-function applyMaterialsFromCache(mode) {
-    if (!displayModesCache[mode]) return;
-    
-    
-    const startTime = performance.now();
-    
-
-    const materialMap = new Map();
-    let appliedCount = 0;
-    
-
-    model.traverse((node) => {
-        if (node.isMesh && node.material) {
-            if (Array.isArray(node.material)) {
-
-                node.material.forEach((material, index) => {
-                    if (displayModesCache[mode].has(material)) {
-
-
-                        const cachedMaterial = displayModesCache[mode].get(material);
-                        materialMap.set(material, cachedMaterial);
-                    }
-                });
-            } else if (displayModesCache[mode].has(node.material)) {
-
-                const cachedMaterial = displayModesCache[mode].get(node.material);
-                materialMap.set(node.material, cachedMaterial);
-            }
-            
-            // Безопасное удаление свойства onBeforeRender, если оно есть
-            if (node.hasOwnProperty('onBeforeRender')) {
-                delete node.onBeforeRender;
-            }
-        }
-    });
-    
-
-    materialMap.forEach((cachedMaterial, material) => {
-        material.wireframe = cachedMaterial.wireframe;
-        material.transparent = cachedMaterial.transparent;
-        material.opacity = cachedMaterial.opacity;
-        // Всегда используем одностороннее отображение, независимо от кэша
-        material.side = THREE.FrontSide;
-        material.color.copy(cachedMaterial.color);
-        if (material.emissive && cachedMaterial.emissive) {
-            material.emissive.copy(cachedMaterial.emissive);
-        }
-        
-
-        material.map = cachedMaterial.map;
-        material.normalMap = cachedMaterial.normalMap;
-        material.roughnessMap = cachedMaterial.roughnessMap;
-        material.metalnessMap = cachedMaterial.metalnessMap;
-        material.aoMap = cachedMaterial.aoMap;
-        material.emissiveMap = cachedMaterial.emissiveMap;
-        
-
-        if (cachedMaterial.metalness !== undefined) {
-            material.metalness = cachedMaterial.metalness;
-        }
-        if (cachedMaterial.roughness !== undefined) {
-            material.roughness = cachedMaterial.roughness;
-        }
-        if (cachedMaterial.flatShading !== undefined) {
-            material.flatShading = cachedMaterial.flatShading;
-        }
-        
-
-        material.polygonOffset = cachedMaterial.polygonOffset;
-        material.polygonOffsetFactor = cachedMaterial.polygonOffsetFactor;
-        material.polygonOffsetUnits = cachedMaterial.polygonOffsetUnits;
-        
-
-        material.needsUpdate = true;
-        appliedCount++;
-    });
-    
-    const endTime = performance.now();
-    
-    
-
-    if (renderer && scene && camera) {
-        renderer.render(scene, camera);
-    }
-}
-
-function resetDisplayMode() {
-
-    if (isCacheInitialized && displayModesCache.normal) {
-        applyMaterialsFromCache('normal');
-    } else {
-
-        restoreOriginalMaterials();
-    }
-    
-
-    removeHelperObjects();
-    
-
-    if (!isCacheInitialized) {
-        originalMaterialProps.clear();
-    }
-    
-    
-}
-
-function clearDisplayModesCache() {
-
-    for (const mode in displayModesCache) {
-        if (displayModesCache[mode]) {
-            if (displayModesCache[mode] instanceof Map) {
-
-                displayModesCache[mode].forEach((cacheMaterial) => {
-                    if (cacheMaterial && cacheMaterial.dispose) {
-                        if (cacheMaterial.map) cacheMaterial.map.dispose();
-                        if (cacheMaterial.normalMap) cacheMaterial.normalMap.dispose();
-                        if (cacheMaterial.metalnessMap) cacheMaterial.metalnessMap.dispose();
-                        if (cacheMaterial.roughnessMap) cacheMaterial.roughnessMap.dispose();
-                        cacheMaterial.dispose();
-                    }
-                });
-                displayModesCache[mode].clear();
-            }
-            displayModesCache[mode] = null;
-        }
-    }
-    
-
+// Подсистема режимов отображения («Обычный / Каркас / Скетч») удалена: кнопки не
+// использовались, а фоновая инициализация кэша через 5 секунд после загрузки клонировала
+// каждый материал трижды и пересобирала EdgesGeometry по всей модели. Рёбра (addEdgeLines)
+// и восстановление материалов оставлены — на них стоит этап B.
+
+// От прежней clearDisplayModesCache() осталась только та часть, что относится к рёбрам
+// и снимку исходных материалов: кэш материалов режимов больше не существует.
+function clearEdgesCache() {
     if (edgesGeometryCache.size > 0) {
         edgesGeometryCache.forEach((geometry) => {
-            if (geometry && geometry.dispose) {
-                geometry.dispose();
-            }
+            if (geometry && geometry.dispose) geometry.dispose();
         });
         edgesGeometryCache.clear();
-        
     }
-    
 
     if (edgesMaterial) {
         edgesMaterial.dispose();
         edgesMaterial = null;
-        
     }
-    
-
-    isCacheInitialized = false;
-    
 
     originalMaterialProps.clear();
-    
-    
-}
-
-function applyWireframeMode() {
-    const materials = collectMaterials();
-    
-    let appliedCount = 0;
-
-    materials.forEach(material => {
-        saveOriginalMaterialProps(material);
-
-        material.wireframe = true;
-
-        disableTextures(material);
-
-        material.transparent = true;
-        material.opacity = 0.6;
-
-        material.color.set(0xdddddd); // Светло-серый цвет
-        if (material.emissive) material.emissive.set(0x000000); // Убираем эмиссию
-        
-        material.side = THREE.FrontSide; // Используем одностороннее отображение
-
-        material.needsUpdate = true;
-        appliedCount++;
-    });
-}
-
-function applyWireframeSolidModeNoCache() {
-    const materials = collectMaterials();
-
-    materials.forEach(material => {
-        saveOriginalMaterialProps(material);
-
-        material.wireframe = false;
-
-        disableTextures(material);
-
-        material.transparent = false;
-        material.opacity = 1.0;
-
-        if (material.type !== 'MeshBasicMaterial') {
-            originalMaterialProps.get(material).materialType = material.type;
-
-            material.metalness = 0;
-            material.roughness = 1;
-            material.flatShading = true;
-        }
-
-        material.color.set(0xdddddd); // Светло-серый цвет для полигонов
-        if (material.emissive) material.emissive.set(0x000000);
-
-        material.polygonOffset = true;
-        material.polygonOffsetFactor = 1;
-        material.polygonOffsetUnits = 1;
-        
-        material.side = THREE.FrontSide; // Используем одностороннее отображение
-
-        material.needsUpdate = true;
-    });
 }
 
 function addEdgeLines() {
@@ -3826,15 +3323,6 @@ function saveOriginalMaterialProps(material) {
         polygonOffsetFactor: material.polygonOffsetFactor,
         polygonOffsetUnits: material.polygonOffsetUnits
     });
-}
-
-function disableTextures(material) {
-    material.map = null;
-    material.normalMap = null;
-    material.roughnessMap = null;
-    material.metalnessMap = null;
-    material.aoMap = null;
-    material.emissiveMap = null;
 }
 
 function restoreOriginalMaterials() {
@@ -3997,6 +3485,12 @@ function handleTouchStart(event) {
     event.preventDefault();
     
     if (event.touches.length === 2) {
+        // Два пальца в орбитальном режиме — забота OrbitControls, сюда не вмешиваемся.
+        if (controlMode !== 'wasd') {
+            isTouching = false;
+            return;
+        }
+        
         const dx = event.touches[0].clientX - event.touches[1].clientX;
         const dy = event.touches[0].clientY - event.touches[1].clientY;
         pinchStartDistance = Math.sqrt(dx * dx + dy * dy);
@@ -4030,34 +3524,21 @@ function handleTouchMove(event) {
     
     event.preventDefault();
     
-    // Обработка масштабирования двумя пальцами (pinch-to-zoom)
-    if (isPinching && event.touches.length === 2) {
+    // Обработка масштабирования двумя пальцами (pinch-to-zoom) — только режим WASD
+    if (isPinching && controlMode === 'wasd' && event.touches.length === 2) {
         const dx = event.touches[0].clientX - event.touches[1].clientX;
         const dy = event.touches[0].clientY - event.touches[1].clientY;
         const pinchDistance = Math.sqrt(dx * dx + dy * dy);
         
         const pinchDelta = pinchDistance - pinchStartDistance;
         
-        if (controlMode === 'wasd') {
-            // Более плавное изменение скорости в зависимости от силы жеста
-            const pinchFactor = Math.sign(pinchDelta) * Math.min(0.5, Math.abs(pinchDelta) / 50);
-            moveSpeed = Math.max(MIN_MOVE_SPEED, 
-                        Math.min(MAX_MOVE_SPEED, 
-                            moveSpeed + pinchFactor));
-            updateSpeedIndicator();
-        } else {
-            // Более плавное масштабирование для обычного режима
-            const zoomFactor = 0.01;
-            const movementVector = new THREE.Vector3().subVectors(controls.target, camera.position).normalize();
-            
-            if (pinchDelta > 0) {
-                camera.position.addScaledVector(movementVector, pinchDelta * zoomFactor);
-            } else {
-                camera.position.addScaledVector(movementVector, pinchDelta * zoomFactor);
-            }
-            
-            controls.update();
-        }
+        // Только WASD: здесь жест меняет скорость полёта. В орбитальном режиме два пальца
+        // обрабатывает сам OrbitControls (controls.touches), своего зума тут больше нет.
+        const pinchFactor = Math.sign(pinchDelta) * Math.min(0.5, Math.abs(pinchDelta) / 50);
+        moveSpeed = Math.max(MIN_MOVE_SPEED, 
+                    Math.min(MAX_MOVE_SPEED, 
+                        moveSpeed + pinchFactor));
+        updateSpeedIndicator();
         
         pinchStartDistance = pinchDistance;
         return;
@@ -4097,8 +3578,6 @@ function handleTouchMove(event) {
                     targetRotationY = targetRotationYOnMouseDown - movementY * touchRotationSpeed;
                     
                     // Убираем ВСЕ проверки и ограничения вертикального угла
-                    // Дебаг: выводим текущие углы для отладки
-                    console.log(`Сенсорное вращение: X: ${(targetRotationX * 180 / Math.PI).toFixed(1)}°, Y: ${(targetRotationY * 180 / Math.PI).toFixed(1)}°`);
                 }
                 break;
             }
@@ -4107,10 +3586,9 @@ function handleTouchMove(event) {
 }
 
 function handleTouchEnd(event) {
-    if (isUIElement(event.target)) {
-        return;
-    }
-    
+    // Раньше здесь стоял ранний выход по isUIElement: если палец уходил с холста на
+    // кнопку, isTouching/isPinching оставались взведёнными до следующего касания.
+    // Состояние жеста сбрасываем всегда, в том числе по touchcancel.
     if (isPinching) {
         isPinching = false;
         pinchStartDistance = 0;
@@ -5749,13 +5227,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
     }, 300);
 
-    // Отложенная инициализация режимов отображения
-    setTimeout(() => {
-        if (currentDisplayMode && currentDisplayMode !== 'normal') {
-            updateDisplayModeUI(currentDisplayMode);
-        }
-    }, 1000);
-    
     console.log('✅ Инициализация завершена');
 });
 

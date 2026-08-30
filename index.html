@@ -1141,20 +1141,17 @@
 
         <div id="controls" class="controls">
             <button id="reset-camera" class="control-btn">Сброс камеры</button>
+            <button id="top-view" class="control-btn">Вид сверху</button>
             <button id="toggle-control" class="control-btn">WASD управление</button>
             <div id="speed-control" style="display: none;">
                 <span>Скорость: <span id="speed-indicator">5.0</span></span>
             </div>
         </div>
         
-        <div id="display-mode">
-            <h4>Отображение</h4>
-            <div id="display-mode-buttons">
-                <button class="display-mode-btn" data-mode="normal">Обычный</button>
-                <button class="display-mode-btn" data-mode="wireframe">Каркас</button>
-                <button class="display-mode-btn" data-mode="wireframe-solid">Скетч</button>
-            </div>
-        </div>
+        <!-- Содержимое панели целиком собирает setupHDRInterface(): она делает
+             innerHTML = '' и строит секции сама. Здесь нужен только контейнер —
+             разметка внутри до экрана всё равно не доезжает. -->
+        <div id="display-mode"></div>
         
         <!-- Добавляем кнопку перехода в полноэкранный режим -->
         <button id="fullscreen-btn">
