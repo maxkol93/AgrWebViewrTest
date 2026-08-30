@@ -1085,6 +1085,11 @@ function handleKeyDown(e) {
         console.log('Переключение режима управления');
         toggleControlMode();
     }
+
+    // P — прямые вертикали (двухточечная перспектива)
+    if (key === 'p' || key === 'з') {
+        toggleTwoPointView();
+    }
     
     // Обработчик клавиши Shift - активируем режим ускорения/специальных возможностей
     if (key === 'shift' && controlMode === 'wasd') {
@@ -1282,6 +1287,9 @@ function toggleControlMode() {
     if (controlMode === 'orbit') {
         // Переключаемся в режим WASD
         controlMode = 'wasd';
+
+        // В полёте вертикали выпрямлять нечем: смотреть вверх и вниз там нужно
+        if (twoPointView) setTwoPointView(false);
         
         // В WASD летаем только перспективной камерой
         exitTopViewImmediate();
@@ -3279,6 +3287,10 @@ function animate() {
 
     if (controls) controls.update();
 
+    // После controls.update(): он каждым кадром делает lookAt(target) и вернул бы
+    // камере наклон, который мы только что убрали.
+    applyTwoPointView();
+
     updateWASDControls();
 
     if (renderer && scene && camera) {
@@ -3318,6 +3330,25 @@ function trackFps() {
     if (indicator) indicator.textContent = String(fpsValue);
 }
 
+// Панель настроек стоит над панелью управления, а та на узком экране переносится
+// на две строки — и подписи кнопок ещё меняются на ходу («Вид сверху» ↔ «Обычный
+// вид»). Поэтому отступ не константа: высота уезжает в CSS-переменную.
+function trackControlsHeight() {
+    const controls = document.getElementById('controls');
+    if (!controls) return;
+
+    const apply = () => {
+        document.documentElement.style.setProperty('--controls-height', controls.offsetHeight + 'px');
+    };
+
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(apply).observe(controls);
+    } else {
+        window.addEventListener('resize', apply);
+    }
+    apply();
+}
+
 // Добавляем функциональность UI элементов
 function setupUI() {
     console.log('Инициализация UI...');
@@ -3327,6 +3358,14 @@ function setupUI() {
         topViewButton.addEventListener('click', toggleTopView);
         updateTopViewButton();
     }
+
+    const twoPointButton = document.getElementById('two-point');
+    if (twoPointButton) {
+        twoPointButton.addEventListener('click', toggleTwoPointView);
+        updateTwoPointButton();
+    }
+
+    trackControlsHeight();
     
     const resetCameraButton = document.getElementById('reset-camera');
     const toggleControlButton = document.getElementById('toggle-control');
@@ -3557,6 +3596,7 @@ function resetCamera(immediate = false) {
     // Сброс всегда возвращает в обычную перспективу: иначе «Сброс камеры» в ортовиде
     // выглядит так, будто он не сработал. Без перелёта — дальше своя анимация сброса.
     exitTopViewImmediate();
+    setTwoPointView(false);
 
     const resetPos = () => {
         // Сохраняем оригинальную позицию и ориентацию
@@ -3771,9 +3811,13 @@ function orbitAroundPivot(yaw, pitch) {
     const pitchQuat = new THREE.Quaternion().setFromAxisAngle(right, pitch);
     const rotation = yawQuat.multiply(pitchQuat);
 
+    // В двухточечной перспективе тангаж ограничен сильнее полюсов: дальше сдвиг
+    // кадра растягивает картинку. Своё вращение полярные пределы OrbitControls
+    // не соблюдает, поэтому предел проверяем здесь отдельно.
+    const pitchLimit = twoPointView ? TWO_POINT_MAX_PITCH_SIN : 0.995;
     const direction = camera.getWorldDirection(new THREE.Vector3()).applyQuaternion(rotation);
-    if (Math.abs(direction.y) > 0.995) {
-        // слишком близко к полюсу — оставляем только рыскание
+    if (Math.abs(direction.y) > pitchLimit) {
+        // за пределом — оставляем только рыскание
         rotation.copy(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw));
     }
 
@@ -3948,6 +3992,9 @@ function setTopView(enabled) {
     // В WASD ортокамера смысла не имеет — возвращаемся в орбитальный режим
     if (enabled && controlMode === 'wasd') toggleControlMode();
 
+    // Сдвиг кадра и ортопроекция вместе не работают
+    if (enabled && twoPointView) setTwoPointView(false);
+
     cameraFlightCancelled = true;
     userMovedCamera = true;
 
@@ -3988,6 +4035,99 @@ function setTopView(enabled) {
 
 function toggleTopView() {
     setTopView(!isTopView);
+}
+
+// ─── Двухточечная перспектива ─────────────────────────────────────────────────
+// Приём из архвиза: вертикали здания не должны заваливаться. Достигается не
+// поворотом камеры, а сдвигом кадра — как шифт-объективом. Камера смотрит строго
+// по горизонту (тогда все вертикали параллельны плоскости кадра и остаются
+// параллельными на картинке), а наклон, который человек задал мышью, переносится
+// в вертикальное смещение фрустума через camera.setViewOffset().
+//
+// Смотреть далеко вверх или вниз в таком режиме нельзя: сдвиг растёт как тангенс
+// и за 35° картинка начинает растягиваться. Поэтому тангаж ограничен — и в
+// OrbitControls, и в своём вращении правой кнопкой (оно полярные пределы
+// OrbitControls не соблюдает, у него свой путь).
+
+let twoPointView = false;
+let twoPointApplied = false;
+
+// Максимальный тангаж, при котором сдвиг ещё выглядит как перспектива, а не как
+// растяжка. Держим и в радианах (для пределов OrbitControls), и синусом
+// (для своего вращения — там под рукой направление взгляда, а не угол).
+const TWO_POINT_MAX_PITCH = THREE.MathUtils.degToRad(35);
+const TWO_POINT_MAX_PITCH_SIN = Math.sin(TWO_POINT_MAX_PITCH);
+
+function setTwoPointView(enabled) {
+    if (!controls || enabled === twoPointView) return;
+
+    // С видом сверху несовместимо: там камера ортогональная и смотрит в надир
+    if (enabled && isTopView) setTopView(false);
+    if (enabled && controlMode === 'wasd') toggleControlMode();
+
+    twoPointView = enabled;
+
+    if (enabled) {
+        controls.minPolarAngle = Math.PI / 2 - TWO_POINT_MAX_PITCH;
+        controls.maxPolarAngle = Math.PI / 2 + TWO_POINT_MAX_PITCH;
+        controls.update();
+    } else {
+        controls.minPolarAngle = 0;
+        controls.maxPolarAngle = Math.PI;
+        if (camera && camera.isPerspectiveCamera) camera.clearViewOffset();
+        twoPointApplied = false;
+    }
+
+    updateTwoPointButton();
+}
+
+function toggleTwoPointView() {
+    setTwoPointView(!twoPointView);
+}
+
+function updateTwoPointButton() {
+    const button = document.getElementById('two-point');
+    if (!button) return;
+    button.textContent = twoPointView ? 'Обычная перспектива' : 'Прямые вертикали';
+    button.classList.toggle('active', twoPointView);
+}
+
+// Вызывается из animate() после controls.update(): тот каждым кадром делает
+// lookAt(target) и возвращает камере наклон, поэтому выпрямлять её надо после него.
+function applyTwoPointView() {
+    if (!camera || !camera.isPerspectiveCamera || !controls) return;
+
+    if (!twoPointView || controlMode !== 'orbit' || isTopView) {
+        if (twoPointApplied) {
+            camera.clearViewOffset();
+            twoPointApplied = false;
+        }
+        return;
+    }
+
+    const target = controls.target;
+    const dx = target.x - camera.position.x;
+    const dy = target.y - camera.position.y;
+    const dz = target.z - camera.position.z;
+    const horizontal = Math.hypot(dx, dz);
+
+    // Взгляд строго в надир или зенит: горизонтального направления нет, выпрямлять
+    // нечего. Пределы тангажа сюда не пускают, но зум вплотную может.
+    if (horizontal < 1e-4) return;
+
+    camera.lookAt(camera.position.x + dx, camera.position.y, camera.position.z + dz);
+
+    const pitch = Math.atan2(dy, horizontal);
+    const width = container.clientWidth || 1;
+    const height = container.clientHeight || 1;
+    const halfFov = THREE.MathUtils.degToRad(camera.fov) / 2;
+
+    // Точка под углом pitch попадает у горизонтальной камеры на tan(pitch)/tan(fov/2)
+    // от центра кадра; сдвигаем фрустум ровно на столько же обратно.
+    const offsetY = -(height / 2) * Math.tan(pitch) / Math.tan(halfFov);
+
+    camera.setViewOffset(width, height, 0, offsetY, width, height);
+    twoPointApplied = true;
 }
 
 function updateTopViewButton() {

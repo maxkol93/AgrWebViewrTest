@@ -778,7 +778,13 @@
 
             #controls {
                 flex-direction: row;
-                flex-wrap: nowrap;
+                /* Отступы в ширину: без этого max-width в альбомной ориентации
+                   считается по контенту и панель всё равно наезжает */
+                box-sizing: border-box;
+                /* Кнопок пять, и на узком экране они переносятся на вторую строку.
+                   Панель настроек стоит над ними и следит за высотой через
+                   --controls-height (её проставляет trackControlsHeight). */
+                flex-wrap: wrap;
                 align-items: center;
                 bottom: 8px;
                 left: 8px;
@@ -790,18 +796,16 @@
                 box-shadow: 0 4px 16px rgba(0,0,0,0.4);
             }
             button.control-btn {
-                flex: 1 1 auto;
+                flex: 0 1 auto;
                 width: auto;
                 min-width: 0;
                 box-sizing: border-box;
-                padding: 9px 6px;
+                padding: 9px 8px;
                 font-size: 11px;
                 letter-spacing: 0;
-                /* Строго одна строка: длинную подпись лучше подрезать, чем поднять
-                   всю панель на второй ряд и уехать под панель освещения */
+                /* Подпись не режем: пусть кнопка уедет на вторую строку, чем
+                   превратится в «Прямые ве…» */
                 white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
             }
             #speed-control {
                 flex: 0 0 auto;
@@ -816,7 +820,7 @@
                сверху оставался виден. */
             #display-mode {
                 top: auto;
-                bottom: 58px;
+                bottom: calc(var(--controls-height, 46px) + 12px);
                 left: 8px;
                 right: 8px;
                 width: auto;
@@ -899,6 +903,9 @@
             #controls {
                 right: auto;
                 width: auto;
+                /* Панель настроек стоит справа полосой в 240px: не даём кнопкам
+                   до неё дорасти, пусть лучше перенесутся */
+                max-width: calc(100% - 272px);
             }
             button.control-btn { flex: 0 0 auto; }
             #speed-control { flex: 0 0 auto; }
@@ -941,6 +948,7 @@
         <div id="controls" class="controls">
             <button id="reset-camera" class="control-btn">Сброс камеры</button>
             <button id="top-view" class="control-btn">Вид сверху</button>
+            <button id="two-point" class="control-btn" title="Двухосевая (двухточечная) перспектива: вертикали не заваливаются">Прямые вертикали</button>
             <button id="toggle-control" class="control-btn">WASD управление</button>
             <button id="toggle-settings" class="control-btn">Настройки</button>
             <div id="speed-control" style="display: none;">
@@ -1043,6 +1051,10 @@
                 <div class="help-row">
                     <span>Режим WASD:</span>
                     <span>G</span>
+                </div>
+                <div class="help-row">
+                    <span>Прямые вертикали:</span>
+                    <span>P</span>
                 </div>
                 <div class="help-row">
                     <span>Помощь:</span>
