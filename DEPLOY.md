@@ -362,8 +362,20 @@ node deploy/models-table.mjs --diff models-tables/models-table_04.08.2026.xlsx  
 артефактах прогона (`models-table-<стенд>`), `table-order.json` при этом обновляется в бакете.
 
 Подсветки там нет: история выгрузок лежит только локально (`models-tables/` в `.gitignore`),
-сравнивать раннеру не с чем. Нужна подсветка — качай артефакт, клади в `models-tables/` и
-гоняй `--diff` локально.
+сравнивать раннеру не с чем. Её доставляет `--recolor` — он красит уже собранную таблицу и
+в сеть не ходит, поэтому работает при **включённом** VPN, когда до бакета не достучаться:
+
+```powershell
+gh workflow run models-table.yml --ref main -f target=prod -f publish_order=true
+gh run download <id прогона> -n models-table-prod -D C:\temp\table
+node deploy/models-table.mjs --recolor C:\temp\table\models-table-new.xlsx
+# → models-tables/models-table_ДД.ММ.ГГГГ.xlsx, сравнение с прошлой выгрузкой
+```
+
+База сравнения — как у `--diff`: последний файл в `models-tables/` либо явный `--diff <файл>`;
+`--out` задаёт имя результата. Бакет и `table-order.json` при этом не трогаются (их обновил
+прогон в Actions). Шапка артефакта должна совпадать с текущей `HEADER` — иначе скрипт
+останавливается, чтобы не залить цветом не те колонки.
 
 Ручной запуск (`workflow_dispatch`) GitHub показывает **только для файлов из ветки по
 умолчанию** — пока workflow не в `main`, кнопки «Run workflow» не будет.

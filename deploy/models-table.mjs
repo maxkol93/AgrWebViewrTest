@@ -36,6 +36,11 @@
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff models-tables/models-table_04.08.2026.xlsx
 //
+// --recolor подсвечивает уже собранную таблицу (артефакт прогона в Actions) — без сети,
+// поэтому годится при включённом VPN, когда до бакета не достучаться. Сравнивает с той же
+// прошлой выгрузкой, что и --diff; бакет и table-order.json при этом не трогаются.
+//   node deploy/models-table.mjs --recolor C:\temp\models-table-new.xlsx
+//
 // Каждый прогон кладёт в бакет table-order.json (порядок кодов + базы ссылок): из него
 // кнопка «Выгрузить таблицу» в админке собирает такую же таблицу прямо в браузере.
 // Отключается флагом --no-order.
@@ -773,7 +778,7 @@ function defaultOutPath(now = new Date()) {
  *
  * @returns {Promise<string|null>}
  */
-async function latestHistoryFile(exclude) {
+async function latestHistoryFile(...exclude) {
   const dir = path.join(root, HISTORY_DIR);
   let names;
   try {
@@ -781,17 +786,52 @@ async function latestHistoryFile(exclude) {
   } catch {
     return null;
   }
-  const skip = exclude ? path.resolve(exclude) : '';
+  const skip = new Set(exclude.filter(Boolean).map((p) => path.resolve(p)));
   const candidates = [];
   for (const name of names) {
     if (!/\.xlsx$/i.test(name) || name.startsWith('~$')) continue; // ~$ — временные файлы Excel
     const full = path.join(dir, name);
-    if (path.resolve(full) === skip) continue;
+    if (skip.has(path.resolve(full))) continue;
     candidates.push({ full, mtime: (await stat(full)).mtimeMs });
   }
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.mtime - a.mtime);
   return candidates[0].full;
+}
+
+/**
+ * Подсветка без сети: берём готовый .xlsx (артефакт прогона в Actions) и перекрашиваем
+ * его по прошлой выгрузке. Ни бакеты, ни Google-таблица не читаются — это единственный
+ * способ получить подсветку при включённом VPN, когда до бакета не достучаться.
+ */
+export async function recolorXlsx(opts = {}) {
+  const src = path.resolve(opts.recolor);
+  const rows = await readXlsxRows(src);
+  // Строки сравниваются по HEADER: если шапка файла другая (собран другой версией
+  // скрипта), подсветка встала бы не в те колонки — лучше остановиться сразу.
+  const head = (rows[0] || []).map((h) => String(h ?? '').trim());
+  if (head.join(' ') !== HEADER.join(' ')) {
+    throw new Error(`шапка ${path.basename(src)} не совпадает с текущей — пересоберите таблицу этой версией скрипта`);
+  }
+
+  const outPath = path.resolve(opts.out || defaultOutPath());
+  const diffSource = opts.diff && opts.diff !== true ? opts.diff : await latestHistoryFile(outPath, src);
+  if (!diffSource) {
+    throw new Error(`в ${HISTORY_DIR}/ нет прошлых выгрузок — сравнивать не с чем`);
+  }
+
+  const { marks, stats } = markChanges(rows, await readXlsxRows(path.resolve(diffSource)));
+  if (stats.skipped) throw new Error(`в ${path.basename(diffSource)} нет колонки «код СУИП» — сравнивать нечем`);
+
+  await mkdir(path.dirname(outPath), { recursive: true });
+  await writeFile(outPath, buildXlsx(rows, 'Модели', marks));
+
+  console.log(`Строк: ${rows.length - 1} (исходник ${path.basename(src)})`);
+  console.log(`Подсветка (сравнение с ${path.basename(diffSource)}): зелёных (новых) ${stats.added}, жёлтых (изменившихся) ${stats.changed}`);
+  if (stats.skippedColumns?.length) console.log(`  колонок не было в прошлой выгрузке, не сравнивались: ${stats.skippedColumns.join(', ')}`);
+  if (stats.newCodes.length) console.log(`  кодов, которых раньше не было: ${stats.newCodes.length} (${stats.newCodes.slice(0, 10).join(', ')}${stats.newCodes.length > 10 ? ', …' : ''})`);
+  console.log(`✓ Файл: ${outPath}`);
+  return { rows, marks, stats, outPath, diffSource };
 }
 
 // ─────────────────────────────────── CLI ─────────────────────────────────────
@@ -867,17 +907,26 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const diff = args.includes('--diff')
     ? (diffArg && !diffArg.startsWith('--') ? diffArg : true)
     : undefined;
-  exportXlsx({
-    out: argValue(args, '--out'),
-    sheetId: argValue(args, '--sheet'),
-    siteBase: argValue(args, '--site'),
-    devBucket: argValue(args, '--dev-bucket'),
-    devSite: argValue(args, '--dev-site'),
-    noDev: args.includes('--no-dev'),
-    diff,
-    noOrder: args.includes('--no-order'),
-  }).catch((err) => {
-    console.error('✗ Ошибка сборки таблицы:', err.message || err);
-    process.exit(1);
-  });
+  // `--recolor <файл>` — только подсветка готовой таблицы, без чтения бакетов.
+  const recolor = argValue(args, '--recolor');
+  if (recolor) {
+    recolorXlsx({ recolor, diff, out: argValue(args, '--out') }).catch((err) => {
+      console.error('✗ Ошибка подсветки:', err.message || err);
+      process.exit(1);
+    });
+  } else {
+    exportXlsx({
+      out: argValue(args, '--out'),
+      sheetId: argValue(args, '--sheet'),
+      siteBase: argValue(args, '--site'),
+      devBucket: argValue(args, '--dev-bucket'),
+      devSite: argValue(args, '--dev-site'),
+      noDev: args.includes('--no-dev'),
+      diff,
+      noOrder: args.includes('--no-order'),
+    }).catch((err) => {
+      console.error('✗ Ошибка сборки таблицы:', err.message || err);
+      process.exit(1);
+    });
+  }
 }
