@@ -36,6 +36,11 @@
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff
 //   . .\deploy\config.local.ps1 ; node deploy/models-table.mjs --diff models-tables/models-table_04.08.2026.xlsx
 //
+// --recolor подсвечивает уже собранную таблицу (артефакт прогона в Actions) — без сети,
+// поэтому годится при включённом VPN, когда до бакета не достучаться. Сравнивает с той же
+// прошлой выгрузкой, что и --diff; бакет и table-order.json при этом не трогаются.
+//   node deploy/models-table.mjs --recolor C:\temp\models-table-new.xlsx
+//
 // Каждый прогон кладёт в бакет table-order.json (порядок кодов + базы ссылок): из него
 // кнопка «Выгрузить таблицу» в админке собирает такую же таблицу прямо в браузере.
 // Отключается флагом --no-order.
@@ -117,8 +122,10 @@ export async function fetchStandCodes(bucket) {
   const byId = new Map(subprojects.map((s) => [s.id, s]));
   const codes = new Set();
   for (const m of models) {
-    const sub = byId.get(m.subprojectId);
-    if (sub && sub.code) codes.add(String(sub.code));
+    for (const id of [m.subprojectId, ...(Array.isArray(m.alsoSubprojectIds) ? m.alsoSubprojectIds : [])]) {
+      const sub = byId.get(id);
+      if (sub && sub.code) codes.add(String(sub.code));
+    }
   }
   return { codes, models: models.length };
 }
@@ -280,8 +287,12 @@ export function buildRows({ projects, subprojects, models }, existingCodeOrder, 
   const orphans = []; // модели, чей подпроект вообще не нашёлся
   for (const m of models) {
     if (!subById.has(m.subprojectId)) { orphans.push(m); continue; }
-    if (!modelsBySub.has(m.subprojectId)) modelsBySub.set(m.subprojectId, []);
-    modelsBySub.get(m.subprojectId).push(m);
+    // Модель, показанная в нескольких очередях (alsoSubprojectIds), встаёт в строку каждой.
+    for (const id of [m.subprojectId, ...(Array.isArray(m.alsoSubprojectIds) ? m.alsoSubprojectIds : [])]) {
+      if (!subById.has(id)) continue;
+      if (!modelsBySub.has(id)) modelsBySub.set(id, []);
+      modelsBySub.get(id).push(m);
+    }
   }
 
   // Каталожная часть: всё, кроме проекта Unknown. Common-подпроекты попадают сюда же —
@@ -328,8 +339,11 @@ export function buildRows({ projects, subprojects, models }, existingCodeOrder, 
     : '');
 
   const devCodesUsed = new Set();
-  const rowsForSub = (sub, projectName) => {
-    const list = modelsSorted(modelsBySub.get(sub.id) || []);
+  // В каталоге у кода одна строка — последняя модель (она же открывается по ссылке).
+  // В блоке «без проекта» у всех моделей общий код Unknown, там схлопывать нельзя.
+  const rowsForSub = (sub, projectName, { latestOnly = true } = {}) => {
+    const all = modelsSorted(modelsBySub.get(sub.id) || []);
+    const list = latestOnly ? all.slice(0, 1) : all;
     const head = [String(sub.code), projectName, sub.isCommon ? 'Common' : sub.name];
     const onDev = devLink(sub.code);
     if (onDev) devCodesUsed.add(String(sub.code));
@@ -352,7 +366,7 @@ export function buildRows({ projects, subprojects, models }, existingCodeOrder, 
   const bottom = [];
   for (const sub of unknownSubs) {
     if (!(modelsBySub.get(sub.id) || []).length) continue;
-    bottom.push(...rowsForSub(sub, 'Unknown'));
+    bottom.push(...rowsForSub(sub, 'Unknown', { latestOnly: false }));
   }
   for (const m of orphans) {
     bottom.push(['', 'Unknown', '(подпроект удалён)', 'да', '', '', isoDate(m), uploadedDate(m), shortName(m), m.comment || '', m.name || '']);
@@ -482,8 +496,8 @@ const DATE_COLS = new Set(DATE_HEADERS.map((h) => HEADER.indexOf(h)));
 export const LAST_COL = colName(HEADER.length - 1);
 
 // Базовые стили: 0 — обычный, 1 — шапка, 2 — дата, 3 — ссылка. Подсветка добавляет
-// заливку, поэтому у каждого базового стиля есть зелёная и жёлтая копия (см. styles.xml).
-const MARK_STYLE = { new: 4, changed: 7 };
+// заливку, поэтому у каждого базового стиля есть зелёная, жёлтая и красная копия (см. styles.xml).
+const MARK_STYLE = { new: 4, changed: 7, removed: 10 };
 function styleFor(base, mark) {
   if (!mark) return base;
   return MARK_STYLE[mark] + (base === 0 ? 0 : base === 2 ? 1 : 2);
@@ -567,13 +581,14 @@ export function buildXlsx(rows, sheetName = 'Модели', marks = null) {
         + '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
         + '<font><b/><sz val="11"/><name val="Calibri"/></font>'
         + '<font><u/><color rgb="FF0563C1"/><sz val="11"/><name val="Calibri"/></font></fonts>'
-        + '<fills count="4"><fill><patternFill patternType="none"/></fill>'
+        + '<fills count="5"><fill><patternFill patternType="none"/></fill>'
         + '<fill><patternFill patternType="gray125"/></fill>'
         + '<fill><patternFill patternType="solid"><fgColor rgb="FFC6EFCE"/><bgColor indexed="64"/></patternFill></fill>'
-        + '<fill><patternFill patternType="solid"><fgColor rgb="FFFFEB9C"/><bgColor indexed="64"/></patternFill></fill></fills>'
+        + '<fill><patternFill patternType="solid"><fgColor rgb="FFFFEB9C"/><bgColor indexed="64"/></patternFill></fill>'
+        + '<fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/><bgColor indexed="64"/></patternFill></fill></fills>'
         + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
         + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        + '<cellXfs count="10"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        + '<cellXfs count="13"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
         + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
         + '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
         + '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
@@ -583,7 +598,10 @@ export function buildXlsx(rows, sheetName = 'Модели', marks = null) {
         + '<xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>'
         + '<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>'
         + '<xf numFmtId="164" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>'
-        + '<xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>'
+        + '<xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/>'
+        + '<xf numFmtId="0" fontId="0" fillId="4" borderId="0" xfId="0" applyFill="1"/>'
+        + '<xf numFmtId="164" fontId="0" fillId="4" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>'
+        + '<xf numFmtId="0" fontId="2" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>'
         + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
     },
     {
@@ -691,19 +709,38 @@ export async function readXlsxRows(file) {
   return rows;
 }
 
-// Строку опознаём по паре «код + имя файла»: у одного этапа бывает несколько версий,
-// а код без файла (МОДЕЛЬ = «нет») — тоже нормальная строка со своим ключом.
-const DIFF_KEY = ['код СУИП', 'ФАЙЛ'];
 // Имя колонки содержит обратный слеш — его надо экранировать, иначе строка теряет слеш,
 // не совпадает с HEADER и колонка тихо выпадает из сравнения.
-const DIFF_CMP = ['ПРОЕКТ', 'ОЧЕРЕДЬ\\ЭТАП', 'МОДЕЛЬ', 'ДАТА', 'ЗАГРУЖЕНО', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ'];
+// ФАЙЛ сравнивается тоже: новая модель под тем же кодом — это изменение строки, а не новая строка.
+const DIFF_CMP = ['ПРОЕКТ', 'ОЧЕРЕДЬ\\ЭТАП', 'МОДЕЛЬ', 'ДАТА', 'ЗАГРУЖЕНО', 'КОРОТКОЕ ИМЯ', 'КОММЕНТАРИЙ', 'ФАЙЛ'];
 
-function rowKey(row, pick) {
-  return DIFF_KEY.map((name) => String(pick(row, name) ?? '').trim()).join('\u0000');
+/**
+ * Схлопывает каталожную часть до одной строки на код — первой, то есть последней модели
+ * (buildRows кладёт версии от свежей к старой). Нужна для выгрузок, собранных до того,
+ * как в таблице стала одна строка на код: и для базы сравнения, и для --recolor старого файла.
+ * Блок «без проекта» не трогаем — там у всех моделей общий код.
+ */
+export function collapseRows(rows, pick = (row) => row[0]) {
+  const out = rows.slice(0, 1);
+  const seen = new Set();
+  let bottom = false;
+  for (const row of rows.slice(1)) {
+    const code = String(pick(row) ?? '').trim();
+    if (code === SEPARATOR) bottom = true;
+    if (!bottom && code) {
+      if (seen.has(code)) continue;
+      seen.add(code);
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 /**
  * Помечает строки новой таблицы относительно прошлой выгрузки.
+ * В каталоге строка — это код: зелёная, если кода раньше не было, жёлтая, если у кода
+ * поменялась модель или её поля. В блоке «без проекта» код у всех общий, поэтому там
+ * строку опознаём по паре «код + файл».
  *
  * @returns {{ marks: Map<number, 'new'|'changed'>, stats: object }}
  *          marks — индекс строки в rows (0 — шапка) → вид подсветки
@@ -713,7 +750,7 @@ export function markChanges(newRows, oldRows) {
   const oldPick = (row, name) => (oldHead.indexOf(name) === -1 ? '' : row[oldHead.indexOf(name)]);
   const newPick = (row, name) => (HEADER.indexOf(name) === -1 ? '' : row[HEADER.indexOf(name)]);
   const marks = new Map();
-  const stats = { added: 0, changed: 0, newCodes: [], skipped: !oldHead.includes('код СУИП') };
+  const stats = { added: 0, changed: 0, removed: 0, newCodes: [], skipped: !oldHead.includes('код СУИП') };
   if (stats.skipped) return { marks, stats };
 
   // Прошлая выгрузка могла быть собрана до появления какой-то колонки (так пришла
@@ -721,40 +758,60 @@ export function markChanges(newRows, oldRows) {
   const compare = DIFF_CMP.filter((name) => oldHead.includes(name) && HEADER.includes(name));
   stats.skippedColumns = DIFF_CMP.filter((name) => !compare.includes(name));
 
-  // У одного кода бывает несколько версий с одинаковым именем файла, поэтому под ключом
-  // держим список: строка считается неизменной, если совпала хоть с одной старой.
-  const oldByKey = new Map();
-  const oldCodes = new Set();
-  for (const row of oldRows.slice(1)) {
-    const code = String(oldPick(row, 'код СУИП') ?? '').trim();
-    if (code === SEPARATOR) continue;
-    if (!row.some((v) => String(v ?? '').trim())) continue;
-    if (code) oldCodes.add(code);
-    const key = rowKey(row, oldPick);
-    if (!oldByKey.has(key)) oldByKey.set(key, []);
-    oldByKey.get(key).push(row);
-  }
+  // Модель ушла с кода: моделей не осталось вовсе, либо в строке теперь другой файл
+  // с более ранней ДАТА — значит прежняя «последняя» пропала (строка показывает свежую
+  // по ДАТА, и не пропади она, осталась бы на месте).
+  const lostModel = (row, old) => {
+    const had = String(oldPick(old, 'МОДЕЛЬ') ?? '').trim() === 'да';
+    if (!had) return false;
+    if (String(newPick(row, 'МОДЕЛЬ') ?? '').trim() !== 'да') return true;
+    const file = (pick, x) => String(pick(x, 'ФАЙЛ') ?? '').trim();
+    const date = (pick, x) => String(pick(x, 'ДАТА') ?? '').trim();
+    return file(newPick, row) !== file(oldPick, old) && date(newPick, row) < date(oldPick, old);
+  };
 
-  const seenNewCodes = new Set();
-  for (let r = 1; r < newRows.length; r += 1) {
-    const row = newRows[r];
-    const code = String(newPick(row, 'код СУИП') ?? '').trim();
-    if (code === SEPARATOR) continue;
-    if (!row.some((v) => String(v ?? '').trim())) continue;
-    const prev = oldByKey.get(rowKey(row, newPick));
-    if (!prev) {
+  const keyOf = (row, pick, bottom) => {
+    const code = String(pick(row, 'код СУИП') ?? '').trim();
+    return bottom ? `u|${code}|${String(pick(row, 'ФАЙЛ') ?? '').trim()}` : `c|${code}`;
+  };
+  // Старая выгрузка может быть ещё с несколькими строками на код — берём первую (свежую).
+  // В блоке «без проекта» одинаковые пары «код + файл» бывают (две версии с одним именем
+  // файла), поэтому под ключом список: строка неизменна, если совпала хоть с одной.
+  const oldByKey = new Map();
+  const walk = (rows, pick, fn) => {
+    let bottom = false;
+    for (let r = 1; r < rows.length; r += 1) {
+      const row = rows[r];
+      const code = String(pick(row, 'код СУИП') ?? '').trim();
+      if (code === SEPARATOR) { bottom = true; continue; }
+      if (!row.some((v) => String(v ?? '').trim())) continue;
+      fn(row, r, bottom, code);
+    }
+  };
+  walk(oldRows, oldPick, (row, r, bottom) => {
+    const key = keyOf(row, oldPick, bottom);
+    if (!oldByKey.has(key)) oldByKey.set(key, []);
+    else if (!bottom) return;
+    oldByKey.get(key).push(row);
+  });
+
+  walk(newRows, newPick, (row, r, bottom, code) => {
+    const prev = oldByKey.get(keyOf(row, newPick, bottom));
+    // У кода появилась первая модель — это новое покрытие, а не замена: тоже зелёное.
+    const firstModel = prev && !bottom && String(newPick(row, 'МОДЕЛЬ') ?? '').trim() === 'да'
+      && prev.every((old) => String(oldPick(old, 'МОДЕЛЬ') ?? '').trim() !== 'да');
+    if (!prev || firstModel) {
       marks.set(r, 'new');
       stats.added += 1;
-      if (code && !oldCodes.has(code) && !seenNewCodes.has(code)) {
-        seenNewCodes.add(code);
-        stats.newCodes.push(code);
-      }
-      continue;
+      if (!prev && code && !bottom) stats.newCodes.push(code);
+      return;
     }
     const same = prev.some((old) => compare.every((name) => String(newPick(row, name) ?? '').trim()
       === String(oldPick(old, name) ?? '').trim()));
-    if (!same) { marks.set(r, 'changed'); stats.changed += 1; }
-  }
+    if (same) return;
+    if (!bottom && lostModel(row, prev[0])) { marks.set(r, 'removed'); stats.removed += 1; return; }
+    marks.set(r, 'changed'); stats.changed += 1;
+  });
   return { marks, stats };
 }
 
@@ -773,7 +830,7 @@ function defaultOutPath(now = new Date()) {
  *
  * @returns {Promise<string|null>}
  */
-async function latestHistoryFile(exclude) {
+async function latestHistoryFile(...exclude) {
   const dir = path.join(root, HISTORY_DIR);
   let names;
   try {
@@ -781,17 +838,52 @@ async function latestHistoryFile(exclude) {
   } catch {
     return null;
   }
-  const skip = exclude ? path.resolve(exclude) : '';
+  const skip = new Set(exclude.filter(Boolean).map((p) => path.resolve(p)));
   const candidates = [];
   for (const name of names) {
     if (!/\.xlsx$/i.test(name) || name.startsWith('~$')) continue; // ~$ — временные файлы Excel
     const full = path.join(dir, name);
-    if (path.resolve(full) === skip) continue;
+    if (skip.has(path.resolve(full))) continue;
     candidates.push({ full, mtime: (await stat(full)).mtimeMs });
   }
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.mtime - a.mtime);
   return candidates[0].full;
+}
+
+/**
+ * Подсветка без сети: берём готовый .xlsx (артефакт прогона в Actions) и перекрашиваем
+ * его по прошлой выгрузке. Ни бакеты, ни Google-таблица не читаются — это единственный
+ * способ получить подсветку при включённом VPN, когда до бакета не достучаться.
+ */
+export async function recolorXlsx(opts = {}) {
+  const src = path.resolve(opts.recolor);
+  const rows = collapseRows(await readXlsxRows(src));
+  // Строки сравниваются по HEADER: если шапка файла другая (собран другой версией
+  // скрипта), подсветка встала бы не в те колонки — лучше остановиться сразу.
+  const head = (rows[0] || []).map((h) => String(h ?? '').trim());
+  if (head.join(' ') !== HEADER.join(' ')) {
+    throw new Error(`шапка ${path.basename(src)} не совпадает с текущей — пересоберите таблицу этой версией скрипта`);
+  }
+
+  const outPath = path.resolve(opts.out || defaultOutPath());
+  const diffSource = opts.diff && opts.diff !== true ? opts.diff : await latestHistoryFile(outPath, src);
+  if (!diffSource) {
+    throw new Error(`в ${HISTORY_DIR}/ нет прошлых выгрузок — сравнивать не с чем`);
+  }
+
+  const { marks, stats } = markChanges(rows, await readXlsxRows(path.resolve(diffSource)));
+  if (stats.skipped) throw new Error(`в ${path.basename(diffSource)} нет колонки «код СУИП» — сравнивать нечем`);
+
+  await mkdir(path.dirname(outPath), { recursive: true });
+  await writeFile(outPath, buildXlsx(rows, 'Модели', marks));
+
+  console.log(`Строк: ${rows.length - 1} (исходник ${path.basename(src)})`);
+  console.log(`Подсветка (сравнение с ${path.basename(diffSource)}): зелёных (новых) ${stats.added}, жёлтых (изменившихся) ${stats.changed}, красных (модель ушла) ${stats.removed}`);
+  if (stats.skippedColumns?.length) console.log(`  колонок не было в прошлой выгрузке, не сравнивались: ${stats.skippedColumns.join(', ')}`);
+  if (stats.newCodes.length) console.log(`  кодов, которых раньше не было: ${stats.newCodes.length} (${stats.newCodes.slice(0, 10).join(', ')}${stats.newCodes.length > 10 ? ', …' : ''})`);
+  console.log(`✓ Файл: ${outPath}`);
+  return { rows, marks, stats, outPath, diffSource };
 }
 
 // ─────────────────────────────────── CLI ─────────────────────────────────────
@@ -842,7 +934,7 @@ export async function exportXlsx(opts = {}) {
   if (stats.addedCodes.length) console.log(`  новых кодов: ${stats.addedCodes.length} (${stats.addedCodes.slice(0, 10).join(', ')}${stats.addedCodes.length > 10 ? ', …' : ''})`);
   if (dropped.length) console.log(`  нет в сервисе, из таблицы убраны: ${dropped.length} (${dropped.slice(0, 10).join(', ')}${dropped.length > 10 ? ', …' : ''})`);
   if (diffStats && !diffStats.skipped) {
-    console.log(`Подсветка (сравнение с ${path.basename(diffSource)}): зелёных (новых) ${diffStats.added}, жёлтых (изменившихся) ${diffStats.changed}`);
+    console.log(`Подсветка (сравнение с ${path.basename(diffSource)}): зелёных (новых) ${diffStats.added}, жёлтых (изменившихся) ${diffStats.changed}, красных (модель ушла) ${diffStats.removed}`);
     if (diffStats.skippedColumns?.length) console.log(`  колонок не было в прошлой выгрузке, не сравнивались: ${diffStats.skippedColumns.join(', ')}`);
     if (diffStats.newCodes.length) console.log(`  кодов, которых раньше не было: ${diffStats.newCodes.length} (${diffStats.newCodes.slice(0, 10).join(', ')}${diffStats.newCodes.length > 10 ? ', …' : ''})`);
   }
@@ -867,17 +959,26 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const diff = args.includes('--diff')
     ? (diffArg && !diffArg.startsWith('--') ? diffArg : true)
     : undefined;
-  exportXlsx({
-    out: argValue(args, '--out'),
-    sheetId: argValue(args, '--sheet'),
-    siteBase: argValue(args, '--site'),
-    devBucket: argValue(args, '--dev-bucket'),
-    devSite: argValue(args, '--dev-site'),
-    noDev: args.includes('--no-dev'),
-    diff,
-    noOrder: args.includes('--no-order'),
-  }).catch((err) => {
-    console.error('✗ Ошибка сборки таблицы:', err.message || err);
-    process.exit(1);
-  });
+  // `--recolor <файл>` — только подсветка готовой таблицы, без чтения бакетов.
+  const recolor = argValue(args, '--recolor');
+  if (recolor) {
+    recolorXlsx({ recolor, diff, out: argValue(args, '--out') }).catch((err) => {
+      console.error('✗ Ошибка подсветки:', err.message || err);
+      process.exit(1);
+    });
+  } else {
+    exportXlsx({
+      out: argValue(args, '--out'),
+      sheetId: argValue(args, '--sheet'),
+      siteBase: argValue(args, '--site'),
+      devBucket: argValue(args, '--dev-bucket'),
+      devSite: argValue(args, '--dev-site'),
+      noDev: args.includes('--no-dev'),
+      diff,
+      noOrder: args.includes('--no-order'),
+    }).catch((err) => {
+      console.error('✗ Ошибка сборки таблицы:', err.message || err);
+      process.exit(1);
+    });
+  }
 }

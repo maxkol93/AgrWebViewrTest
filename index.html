@@ -778,6 +778,10 @@
         }
         /* Модалка модели — поверх админ-панели (открывается из неё) */
         #model-form-modal { z-index: 3100; }
+        .agr-checklist { max-height: 140px; overflow-y: auto; margin-bottom: 6px; }
+        .agr-check { display: block; font-weight: normal; margin: 2px 0; cursor: pointer; }
+        .agr-hint { color: #888; font-size: 12px; }
+        .row-also { color: #888; font-size: 12px; }
         /* Лейбл проекта, комментарий версии и заглушка «не найдено» */
         #model-selector { flex-direction: row; align-items: center; gap: 14px; }
         #model-info { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -1284,6 +1288,11 @@
                 <div class="agr-field">
                     <label for="model-form-subproject">Подпроект (Очередь/Этап)</label>
                     <select id="model-form-subproject"></select>
+                </div>
+                <div class="agr-field">
+                    <label>Также показывать в очередях</label>
+                    <div id="model-form-also" class="agr-checklist"></div>
+                    <input type="text" id="model-form-also-codes" autocomplete="off" placeholder="Коды из других проектов, через запятую">
                 </div>
                 <div class="agr-field">
                     <label for="model-form-display">Название модели</label>

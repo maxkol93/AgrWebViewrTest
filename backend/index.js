@@ -220,6 +220,34 @@ async function readModelsJson() {
   return { models, changed };
 }
 
+// Дополнительные очереди, где модель тоже показывается (одна модель на несколько UB).
+// Своя очередь модели остаётся в subprojectId; сюда — только другие, без повторов.
+// Возвращает { ids } или { error } — неизвестный подпроект молча не выбрасываем.
+function cleanAlsoSubprojectIds(raw, subprojects, mainId) {
+  if (raw == null) return { ids: [] };
+  if (!Array.isArray(raw)) return { error: 'alsoSubprojectIds должен быть массивом' };
+  const known = new Set(subprojects.map((s) => s.id));
+  const ids = [];
+  for (const item of raw.slice(0, 500)) {
+    const id = trimStr(item, 80);
+    if (!id || id === mainId || ids.includes(id)) continue;
+    if (!known.has(id)) return { error: `Подпроект ${id} не найден` };
+    ids.push(id);
+  }
+  return { ids };
+}
+
+// Убирает удаляемые подпроекты из alsoSubprojectIds. Возвращает true, если что-то поменялось.
+function dropAlsoSubprojects(models, removedIds) {
+  let changed = false;
+  for (const m of models) {
+    if (!m || !Array.isArray(m.alsoSubprojectIds)) continue;
+    const next = m.alsoSubprojectIds.filter((id) => !removedIds.has(id));
+    if (next.length !== m.alsoSubprojectIds.length) { m.alsoSubprojectIds = next; changed = true; }
+  }
+  return changed;
+}
+
 // Генерирует уникальный код для Common-подпроекта проекта (латиница).
 function makeCommonCode(projectName, existingCodes) {
   const base = `${slugify(projectName)}-common`;
@@ -319,6 +347,8 @@ async function handleProjectDelete(event) {
 
   projects.splice(idx, 1);
   const nextSubprojects = subprojects.filter((s) => s.projectId !== id);
+  // Чужие модели, показанные ещё и в очередях этого проекта, просто теряют эти очереди.
+  if (dropAlsoSubprojects(models, subIds)) await writeModelsJson(models);
   await writeProjectsJson(projects);
   await writeSubprojectsJson(nextSubprojects);
   return reply(200, { ok: true });
@@ -425,6 +455,7 @@ async function handleSubprojectDelete(event) {
   }
 
   subprojects.splice(idx, 1);
+  if (dropAlsoSubprojects(models, new Set([id]))) await writeModelsJson(models);
   await writeSubprojectsJson(subprojects);
   return reply(200, { ok: true });
 }
@@ -460,6 +491,8 @@ async function handleUpload(event) {
   if (!subprojects.some((s) => s.id === subprojectId)) {
     return reply(404, { error: 'Указанный подпроект не найден' });
   }
+  const also = cleanAlsoSubprojectIds(body.alsoSubprojectIds, subprojects, subprojectId);
+  if (also.error) return reply(400, { error: also.error });
 
   const modelDate = normalizeDate(body.modelDate, null);
 
@@ -485,6 +518,7 @@ async function handleUpload(event) {
       name,               // оригинальное имя файла (для скачивания/диагностики)
       displayName,        // пользовательское имя
       subprojectId,
+      alsoSubprojectIds: also.ids,
       modelDate,
       versionName,
       comment,
@@ -511,6 +545,9 @@ async function handleCommit(event) {
   if (!subprojects.some((s) => s.id === model.subprojectId)) {
     return reply(404, { error: 'Указанный подпроект не найден' });
   }
+  const also = cleanAlsoSubprojectIds(model.alsoSubprojectIds, subprojects, model.subprojectId);
+  if (also.error) return reply(400, { error: also.error });
+  model.alsoSubprojectIds = also.ids;
   models.unshift(model);
   await writeModelsJson(models);
   return reply(200, { ok: true });
@@ -535,7 +572,8 @@ async function handleDelete(event) {
   return reply(200, { ok: true });
 }
 
-// Обновление полей существующей модели: displayName, subprojectId, modelDate, versionName, comment.
+// Обновление полей существующей модели: displayName, subprojectId, alsoSubprojectIds,
+// modelDate, versionName, comment.
 async function handleModelUpdate(event) {
   checkAuth(event);
   const body = JSON.parse(event.body || '{}');
@@ -548,10 +586,10 @@ async function handleModelUpdate(event) {
     if (!dn) return reply(400, { error: 'displayName не может быть пустым' });
     patch.displayName = dn;
   }
+  const subprojects = await readSubprojectsJson();
   if (body.subprojectId !== undefined) {
     const sid = trimStr(body.subprojectId, 80);
     if (!sid) return reply(400, { error: 'subprojectId не может быть пустым' });
-    const subprojects = await readSubprojectsJson();
     if (!subprojects.some((s) => s.id === sid)) {
       return reply(404, { error: 'Указанный подпроект не найден' });
     }
@@ -561,13 +599,22 @@ async function handleModelUpdate(event) {
   if (body.versionName !== undefined) patch.versionName = trimStr(body.versionName, 200);
   if (body.comment !== undefined) patch.comment = trimStr(body.comment, 2000);
 
-  if (Object.keys(patch).length === 0) {
-    return reply(400, { error: 'Нечего обновлять' });
-  }
-
   const { models } = await readModelsJson();
   const idx = models.findIndex((m) => m.id === id);
   if (idx < 0) return reply(404, { error: 'Модель не найдена' });
+
+  // Своя очередь не должна дублироваться в дополнительных — в том числе после переноса.
+  const mainId = patch.subprojectId || models[idx].subprojectId;
+  if (body.alsoSubprojectIds !== undefined || patch.subprojectId) {
+    const raw = body.alsoSubprojectIds !== undefined ? body.alsoSubprojectIds : models[idx].alsoSubprojectIds;
+    const also = cleanAlsoSubprojectIds(raw, subprojects, mainId);
+    if (also.error) return reply(400, { error: also.error });
+    patch.alsoSubprojectIds = also.ids;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return reply(400, { error: 'Нечего обновлять' });
+  }
 
   models[idx] = { ...models[idx], ...patch };
   await writeModelsJson(models);
