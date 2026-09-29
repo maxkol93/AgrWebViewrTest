@@ -460,6 +460,7 @@ function normalizeModelEntry(model) {
     m.modelDate = normalizeDateStr(m.modelDate, m.uploadedAt);
     m.versionName = m.versionName || '';
     m.comment = m.comment || '';
+    m.alsoSubprojectIds = Array.isArray(m.alsoSubprojectIds) ? m.alsoSubprojectIds : [];
     return m;
 }
 
@@ -483,9 +484,15 @@ function getSubprojectByCode(code) {
 function getProjectOfSubproject(sub) {
     return sub ? getProject(sub.projectId) : null;
 }
+// Модель показывается в своей очереди и в дополнительных (одна модель на несколько UB).
+function modelShownIn(model, subprojectId) {
+    if (!model) return false;
+    return model.subprojectId === subprojectId
+        || (Array.isArray(model.alsoSubprojectIds) && model.alsoSubprojectIds.includes(subprojectId));
+}
 function modelsOfSubproject(subprojectId) {
     return (userModels || [])
-        .filter((m) => m && m.subprojectId === subprojectId)
+        .filter((m) => modelShownIn(m, subprojectId))
         .sort((a, b) => String(b.modelDate).localeCompare(String(a.modelDate)));
 }
 
@@ -554,6 +561,7 @@ async function uploadModel(file, meta) {
                 format,
                 displayName: meta.displayName,
                 subprojectId: meta.subprojectId,
+                alsoSubprojectIds: meta.alsoSubprojectIds || [],
                 versionName: meta.versionName || '',
                 modelDate: meta.modelDate || undefined,
                 comment: meta.comment || '',
@@ -4818,6 +4826,8 @@ function openModelForm({ mode, file = null, model = null }) {
         const versionInput = document.getElementById('model-form-version');
         const dateInput = document.getElementById('model-form-date');
         const commentInput = document.getElementById('model-form-comment');
+        const alsoBox = document.getElementById('model-form-also');
+        const alsoCodesInput = document.getElementById('model-form-also-codes');
         const confirmBtn = document.getElementById('model-form-confirm');
 
         setModalError('model-form-error', '');
@@ -4825,8 +4835,10 @@ function openModelForm({ mode, file = null, model = null }) {
 
         // Стартовые значения
         let startProjectId, startSubId, startDisplay, startVersion, startDate, startComment;
+        let startAlso = [];
         if (mode === 'edit' && model) {
             startSubId = model.subprojectId;
+            startAlso = Array.isArray(model.alsoSubprojectIds) ? model.alsoSubprojectIds.slice() : [];
             const sub = getSubproject(startSubId);
             startProjectId = sub ? sub.projectId : UNKNOWN_PROJECT_ID;
             startDisplay = model.displayName || model.name || '';
@@ -4854,8 +4866,61 @@ function openModelForm({ mode, file = null, model = null }) {
         dateInput.value = startDate;
         commentInput.value = startComment;
 
-        function onProjectChange() { fillSubprojectSelect(subSel, projectSel.value, null); }
+        // «Также показывать в»: галочки — очереди того же проекта, поле — коды из других.
+        const alsoIds = new Set(startAlso);
+        function renderAlso() {
+            const projectId = projectSel.value;
+            const mainId = subSel.value;
+            alsoBox.innerHTML = '';
+            const subs = (userSubprojects || [])
+                .filter((s) => s.projectId === projectId && !s.isCommon && s.id !== mainId)
+                .sort(subprojectSort);
+            subs.forEach((s) => {
+                const label = document.createElement('label');
+                label.className = 'agr-check';
+                const box = document.createElement('input');
+                box.type = 'checkbox';
+                box.checked = alsoIds.has(s.id);
+                box.addEventListener('change', () => { if (box.checked) alsoIds.add(s.id); else alsoIds.delete(s.id); });
+                label.appendChild(box);
+                label.appendChild(document.createTextNode(` ${s.name} · ${s.code}`));
+                alsoBox.appendChild(label);
+            });
+            if (!subs.length) {
+                const empty = document.createElement('div');
+                empty.className = 'agr-hint';
+                empty.textContent = 'В этом проекте других очередей нет';
+                alsoBox.appendChild(empty);
+            }
+            const sameProject = new Set(subs.map((s) => s.id));
+            alsoCodesInput.value = [...alsoIds]
+                .filter((id) => !sameProject.has(id) && id !== mainId)
+                .map((id) => getSubproject(id))
+                .filter(Boolean)
+                .map((s) => s.code)
+                .join(', ');
+        }
+        // Коды из поля → id подпроектов; неизвестный код — ошибка, а не тихий пропуск.
+        function collectAlso(mainId) {
+            const projectId = projectSel.value;
+            const ids = [...alsoIds].filter((id) => {
+                const s = getSubproject(id);
+                return s && s.projectId === projectId && id !== mainId;
+            });
+            const codes = (alsoCodesInput.value || '').split(/[\s,;]+/).map((c) => c.trim()).filter(Boolean);
+            for (const code of codes) {
+                const s = getSubprojectByCode(code);
+                if (!s) throw new Error(`Код ${code} не найден в каталоге`);
+                if (s.id !== mainId && !ids.includes(s.id)) ids.push(s.id);
+            }
+            return ids;
+        }
+        renderAlso();
+
+        function onProjectChange() { fillSubprojectSelect(subSel, projectSel.value, null); renderAlso(); }
+        function onSubChange() { alsoIds.delete(subSel.value); renderAlso(); }
         projectSel.addEventListener('change', onProjectChange);
+        subSel.addEventListener('change', onSubChange);
 
         async function onConfirm() {
             setModalError('model-form-error', '');
@@ -4866,13 +4931,17 @@ function openModelForm({ mode, file = null, model = null }) {
             const comment = (commentInput.value || '').trim();
             if (!displayName) { setModalError('model-form-error', 'Введите название модели'); return; }
             if (!subprojectId) { setModalError('model-form-error', 'Выберите подпроект'); return; }
+            let alsoSubprojectIds;
+            try { alsoSubprojectIds = collectAlso(subprojectId); } catch (e) { setModalError('model-form-error', e.message); return; }
 
             confirmBtn.disabled = true;
             try {
                 if (mode === 'upload') {
-                    await uploadModel(file, { displayName, subprojectId, versionName, modelDate, comment });
+                    await uploadModel(file, { displayName, subprojectId, alsoSubprojectIds, versionName, modelDate, comment });
                 } else {
-                    const updated = await apiUpdateModel(model.id, { displayName, subprojectId, versionName, modelDate, comment });
+                    const updated = await apiUpdateModel(model.id, {
+                        displayName, subprojectId, alsoSubprojectIds, versionName, modelDate, comment,
+                    });
                     replaceModelInState(updated);
                     refreshAfterModelChange();
                 }
@@ -4887,6 +4956,7 @@ function openModelForm({ mode, file = null, model = null }) {
         function cleanup() {
             confirmBtn.removeEventListener('click', onConfirm);
             projectSel.removeEventListener('change', onProjectChange);
+            subSel.removeEventListener('change', onSubChange);
             overlay.querySelectorAll('[data-modal-close="model-form-modal"]').forEach((b) => b.removeEventListener('click', onCancel));
             closeModal('model-form-modal');
             confirmBtn.disabled = false;
@@ -5056,7 +5126,8 @@ function renderAdminModels() {
         const subName = sub ? sub.name : '—';
         const code = sub ? (sub.code || '') : '';
         if (q) {
-            const hay = `${projName} ${subName} ${code} ${m.displayName} ${m.versionName || ''}`.toLowerCase();
+            const alsoCodes = (m.alsoSubprojectIds || []).map((id) => (getSubproject(id) || {}).code || '').join(' ');
+            const hay = `${projName} ${subName} ${code} ${alsoCodes} ${m.displayName} ${m.versionName || ''}`.toLowerCase();
             if (!hay.includes(q)) return;
         }
         shown += 1;
@@ -5080,6 +5151,13 @@ function renderAdminModels() {
         main.title = `Файл: ${m.name}`;
         const ver = (m.versionName || '').trim();
         main.textContent = `${formatDateRu(m.modelDate)}${ver ? ` — ${ver}` : ''} · ${m.displayName || m.name}`;
+        const alsoSubs = (m.alsoSubprojectIds || []).map((id) => getSubproject(id)).filter(Boolean);
+        if (alsoSubs.length) {
+            const also = document.createElement('div');
+            also.className = 'row-also';
+            also.textContent = `также: ${alsoSubs.map((s) => s.code).join(', ')}`;
+            main.appendChild(also);
+        }
         row.appendChild(main);
 
         const actions = document.createElement('div');
@@ -5305,7 +5383,7 @@ async function deleteModel(modelId) {
         localStorage.setItem('userModels', JSON.stringify(userModels));
 
         // Если удалили модель из текущего пользовательского вида — перерисуем его.
-        if (currentSubproject && removed && removed.subprojectId === currentSubproject.id) {
+        if (currentSubproject && removed && modelShownIn(removed, currentSubproject.id)) {
             const urlToLoad = renderSubprojectView(getSubproject(currentSubproject.id));
             if (urlToLoad && urlToLoad !== currentModelPath) { currentModelPath = urlToLoad; loadModel(); }
             else if (!urlToLoad) showModelNotFound();
@@ -5481,8 +5559,10 @@ async function fetchDevStandCodes() {
         const byId = new Map((subprojects || []).map((s) => [s.id, s]));
         const codes = new Set();
         (models || []).forEach((m) => {
-            const sub = byId.get(m.subprojectId);
-            if (sub && sub.code) codes.add(String(sub.code));
+            [m.subprojectId, ...(Array.isArray(m.alsoSubprojectIds) ? m.alsoSubprojectIds : [])].forEach((id) => {
+                const sub = byId.get(id);
+                if (sub && sub.code) codes.add(String(sub.code));
+            });
         });
         return { codes, base: websiteBaseFor(`${bucket}-dev`) };
     } catch (e) {
@@ -5522,8 +5602,12 @@ function buildModelsTableRows(orderCodes, siteBase, dev) {
     const orphans = [];
     models.forEach((m) => {
         if (!subById.has(m.subprojectId)) { orphans.push(m); return; }
-        if (!modelsBySub.has(m.subprojectId)) modelsBySub.set(m.subprojectId, []);
-        modelsBySub.get(m.subprojectId).push(m);
+        // Модель, показанная в нескольких очередях, встаёт в строку каждой из них.
+        [m.subprojectId, ...(m.alsoSubprojectIds || [])].forEach((id) => {
+            if (!subById.has(id)) return;
+            if (!modelsBySub.has(id)) modelsBySub.set(id, []);
+            modelsBySub.get(id).push(m);
+        });
     });
 
     // Пустой Common есть у каждого проекта по умолчанию — таблицу он не засоряет.
@@ -5564,8 +5648,11 @@ function buildModelsTableRows(orderCodes, siteBase, dev) {
         return d !== 0 ? d : String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || ''));
     });
 
-    const rowsForSub = (sub, projectName) => {
-        const list = sortedModels(modelsBySub.get(sub.id) || []);
+    // В каталоге у кода одна строка — последняя модель (она же открывается по ссылке).
+    // В блоке «без проекта» у всех моделей общий код Unknown, там схлопывать нельзя.
+    const rowsForSub = (sub, projectName, { latestOnly = true } = {}) => {
+        const all = sortedModels(modelsBySub.get(sub.id) || []);
+        const list = latestOnly ? all.slice(0, 1) : all;
         const head = [String(sub.code), projectName, sub.isCommon ? COMMON_NAME : sub.name];
         const onDev = devLink(sub.code);
         if (list.length === 0) return [[...head, 'нет', '', onDev, '', '', '', '', '']];
@@ -5588,7 +5675,7 @@ function buildModelsTableRows(orderCodes, siteBase, dev) {
     const bottom = [];
     unknownSubs.forEach((sub) => {
         if (!(modelsBySub.get(sub.id) || []).length) return;
-        bottom.push(...rowsForSub(sub, UNKNOWN_PROJECT_NAME));
+        bottom.push(...rowsForSub(sub, UNKNOWN_PROJECT_NAME, { latestOnly: false }));
     });
     orphans.forEach((m) => {
         bottom.push(['', UNKNOWN_PROJECT_NAME, '(подпроект удалён)', 'да', '', '',
